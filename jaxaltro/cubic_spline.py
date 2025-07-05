@@ -1,9 +1,3 @@
-"""Cubic spline interpolation for line search in JAX-based ALTRO.
-
-This module provides cubic spline functionality that directly corresponds to the C++
-cubicspline.h/c implementation, maintaining identical mathematical behavior.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,8 +13,6 @@ LINESEARCH_TOL = 1e-6
 
 
 class CubicSplineReturnCode(Enum):
-    """Return codes for cubic spline operations matching C++ enum."""
-
     NO_ERROR = "CS_NOERROR"
     FOUND_MINIMUM = "CS_FOUND_MINIMUM"
     INVALID_POINTER = "CS_INVALIDPOINTER"
@@ -35,11 +27,6 @@ class CubicSplineReturnCode(Enum):
 
 @dataclass(frozen=True)
 class CubicSpline:
-    """Cubic spline representation matching C++ CubicSpline struct.
-
-    Represents polynomial: a + b*(x-x0) + c*(x-x0)^2 + d*(x-x0)^3
-    """
-
     x0: Float
     a: Float
     b: Float
@@ -47,7 +34,6 @@ class CubicSpline:
     d: Float
 
     def is_valid(self) -> bool:
-        """Check if spline coefficients are valid (finite)."""
         return bool(
             jnp.all(
                 jnp.array(
@@ -63,7 +49,6 @@ class CubicSpline:
         )
 
     def evaluate(self, x: Float) -> Float:
-        """Evaluate spline at given point matching C++ CubicSpline_Eval."""
         if not self.is_valid():
             return float(jnp.nan)
 
@@ -71,12 +56,10 @@ class CubicSpline:
         return float(self.a + self.b * delta + self.c * delta**2 + self.d * delta**3)
 
     def is_quadratic(self) -> bool:
-        """Check if spline is effectively quadratic matching C++ CubicSpline_IsQuadratic."""
         return bool(jnp.abs(self.d) < LINESEARCH_TOL)
 
 
 def _quadratic_formula(a: Float, b: Float, c: Float) -> tuple[Float, Float, CubicSplineReturnCode]:
-    """Solve quadratic equation matching C++ QuadraticFormula."""
     if jnp.abs(a) < LINESEARCH_TOL:
         return float(jnp.nan), float(jnp.nan), CubicSplineReturnCode.IS_LINEAR
 
@@ -97,7 +80,6 @@ def _quadratic_formula(a: Float, b: Float, c: Float) -> tuple[Float, Float, Cubi
 def cubic_spline_from_2_points(
     x1: Float, y1: Float, d1: Float, x2: Float, y2: Float, d2: Float
 ) -> tuple[CubicSpline, CubicSplineReturnCode]:
-    """Create cubic spline from two points and derivatives matching C++ CubicSpline_From2Points."""
     delta = x2 - x1
 
     if jnp.abs(delta) < LINESEARCH_TOL:
@@ -118,7 +100,6 @@ def cubic_spline_from_2_points(
 def cubic_spline_from_3_points(
     x0: Float, y0: Float, d0: Float, x1: Float, y1: Float, x2: Float, y2: Float
 ) -> tuple[CubicSpline, CubicSplineReturnCode]:
-    """Create cubic spline from three points matching C++ CubicSpline_From3Points."""
     delta1 = x1 - x0
     delta2 = x2 - x0
 
@@ -144,7 +125,6 @@ def cubic_spline_from_3_points(
 def quadratic_spline_from_2_points(
     x0: Float, y0: Float, d0: Float, x1: Float, y1: Float
 ) -> tuple[CubicSpline, CubicSplineReturnCode]:
-    """Create quadratic spline from two points matching C++ QuadraticSpline_From2Points."""
     delta = x1 - x0
     dy = (y1 - y0) / (delta**2) - d0 / delta
 
@@ -154,7 +134,6 @@ def quadratic_spline_from_2_points(
 
 
 def cubic_spline_argmin(spline: CubicSpline) -> tuple[Float, CubicSplineReturnCode]:
-    """Find minimum of cubic spline matching C++ CubicSpline_ArgMin."""
     if not spline.is_valid():
         return float(jnp.nan), CubicSplineReturnCode.INVALID_POINTER
 

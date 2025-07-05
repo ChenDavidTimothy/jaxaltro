@@ -68,7 +68,6 @@ class CubicLineSearch:
     verbose: bool = False
 
     def set_optimality_tolerances(self, c1: Float, c2: Float) -> bool:
-        """Set Wolfe condition parameters."""
         if c2 <= c1:
             return False
         self.c1 = c1
@@ -76,25 +75,20 @@ class CubicLineSearch:
         return True
 
     def set_verbose(self, verbose: bool) -> bool:
-        """Set verbosity level."""
         old_verbose = self.verbose
         self.verbose = verbose
         return old_verbose
 
     def get_final_merit_values(self) -> tuple[Float, Float]:
-        """Get final merit function values."""
         return self.phi, self.dphi
 
     def get_status(self) -> LineSearchReturnCode:
-        """Get line search status."""
         return self.return_code
 
     def iterations(self) -> int:
-        """Get number of iterations performed."""
         return self.n_iters
 
     def run(self, merit_fun: MeritFunction, alpha0: Float, phi0: Float, dphi0: Float) -> Float:
-        """Run cubic line search matching C++ CubicLineSearch::Run."""
         # Store initial values
         self.phi0 = phi0
         self.dphi0 = dphi0
@@ -216,7 +210,6 @@ class CubicLineSearch:
         return alpha
 
     def _try_cubic_interpolation(self, alpha: Float, phi: Float, dphi: Float) -> Float | None:
-        """Try cubic interpolation on initial interval."""
         spline, err_code = cubic_spline_from_2_points(0.0, self.phi0, self.dphi0, alpha, phi, dphi)
 
         if err_code != CubicSplineReturnCode.NO_ERROR:
@@ -234,7 +227,6 @@ class CubicLineSearch:
         return None
 
     def _zoom(self, merit_fun: MeritFunction, alo: Float, ahi: Float) -> Float:
-        """Zoom phase of line search matching C++ implementation."""
         if not jnp.isfinite(alo) or not jnp.isfinite(ahi):
             self.return_code = LineSearchReturnCode.GOT_NONFINITE_STEP_SIZE
             return 0.0
@@ -333,7 +325,6 @@ class CubicLineSearch:
         return alpha
 
     def _simple_backtracking(self, merit_fun: MeritFunction, alpha0: Float) -> Float:
-        """Simple backtracking line search."""
         alpha = alpha0
 
         for _ in range(1, self.max_iters):
@@ -356,7 +347,6 @@ class CubicLineSearch:
         return alpha
 
     def status_to_string(self) -> str:
-        """Convert status to string description."""
         status_strings = {
             LineSearchReturnCode.NO_ERROR: "No error",
             LineSearchReturnCode.MINIMUM_FOUND: "Minimum found",

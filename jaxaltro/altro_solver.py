@@ -30,44 +30,22 @@ from .types import (
 
 
 class ConstraintIndex:
-    """Constraint index identifier matching C++ ConstraintIndex."""
-
     def __init__(self, knot_point_index: int, constraint_index: int):
         self.knot_point_index = knot_point_index
         self.constraint_index = constraint_index
 
     def get_knot_point_index(self) -> int:
-        """Get knot point index."""
         return self.knot_point_index
 
 
 class ALTROSolver:
-    """Main ALTRO solver interface matching C++ ALTROSolver class.
-
-    This class provides the complete user-facing API for trajectory optimization
-    using the ALTRO algorithm with JAX acceleration.
-    """
-
     def __init__(self, horizon_length: int):
-        """Initialize ALTRO solver matching C++ constructor.
-
-        Args:
-            horizon_length: Number of time steps in the trajectory
-        """
         self.solver = SolverImpl(horizon_length)
         self._callback_function: CallbackFunction | None = None
 
     def set_dimension(
         self, num_states: int, num_inputs: int, k_start: int = ALL_INDICES, k_stop: int = 0
     ) -> None:
-        """Set state and input dimensions matching C++ SetDimension.
-
-        Args:
-            num_states: Number of states (size of state vector)
-            num_inputs: Number of inputs (size of control vector)
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         if self.is_initialized():
             _altro_throw(
                 "Cannot change dimension once solver has been initialized",
@@ -89,13 +67,6 @@ class ALTROSolver:
                 self.solver.data[k - 1].set_next_state_dimension(num_states)
 
     def set_time_step(self, h: Float, k_start: int = ALL_INDICES, k_stop: int = 0) -> None:
-        """Set time step matching C++ SetTimeStep.
-
-        Args:
-            h: Time step
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, False)
 
         if h <= 0.0:
@@ -112,14 +83,6 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set explicit dynamics matching C++ SetExplicitDynamics.
-
-        Args:
-            dynamics_function: Dynamics function
-            dynamics_jacobian: Dynamics Jacobian function
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, False)
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set dynamics")
 
@@ -134,15 +97,6 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set generic cost function matching C++ SetCostFunction.
-
-        Args:
-            cost_function: Cost function
-            cost_gradient: Cost gradient function
-            cost_hessian: Cost Hessian function
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
 
         for k in range(k_start, k_stop):
@@ -160,19 +114,6 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set diagonal cost function matching C++ SetDiagonalCost.
-
-        Args:
-            num_states: Number of states
-            num_inputs: Number of inputs
-            Q_diag: Diagonal state cost matrix
-            R_diag: Diagonal input cost matrix
-            q: Linear state cost
-            r: Linear input cost
-            c: Constant cost
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set cost function")
 
@@ -200,20 +141,6 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set quadratic cost function matching C++ SetQuadraticCost.
-
-        Args:
-            num_states: Number of states
-            num_inputs: Number of inputs
-            Q: State cost matrix
-            R: Input cost matrix
-            H: Cross-term cost matrix
-            q: Linear state cost
-            r: Linear input cost
-            c: Constant cost
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set cost function")
 
@@ -239,18 +166,6 @@ class ALTROSolver:
         k_start: int,
         k_stop: int = 0,
     ) -> None:
-        """Set LQR tracking cost matching C++ SetLQRCost.
-
-        Args:
-            num_states: Number of states
-            num_inputs: Number of inputs
-            Q_diag: Diagonal state penalty matrix
-            R_diag: Diagonal input penalty matrix
-            x_ref: State reference
-            u_ref: Input reference
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set cost function")
 
@@ -286,18 +201,6 @@ class ALTROSolver:
         k_stop: int = 0,
         con_inds: list[ConstraintIndex] | None = None,
     ) -> None:
-        """Set constraint matching C++ SetConstraint.
-
-        Args:
-            constraint_function: Constraint function
-            constraint_jacobian: Constraint Jacobian function
-            dim: Constraint dimension
-            constraint_type: Type of constraint
-            label: Descriptive label
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-            con_inds: Optional list to store constraint indices
-        """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
 
         if self.is_initialized():
@@ -328,12 +231,6 @@ class ALTROSolver:
                 con_inds.append(ConstraintIndex(k, ncon))
 
     def set_initial_state(self, x0: Array, n: int) -> None:
-        """Set initial state matching C++ SetInitialState.
-
-        Args:
-            x0: Initial state
-            n: State dimension
-        """
         n0 = self.get_state_dim(0)
 
         if n0 > 0 and n != n0:
@@ -347,20 +244,11 @@ class ALTROSolver:
         self.solver.initial_state = x0
 
     def initialize(self) -> None:
-        """Initialize solver matching C++ Initialize."""
         self._assert_dimensions_are_set(0, self.get_horizon_length(), "Cannot initialize solver")
         self._assert_timesteps_are_positive("Cannot initialize solver")
         self.solver.initialize()
 
     def set_state(self, x: Array, n: int, k_start: int = ALL_INDICES, k_stop: int = 0) -> None:
-        """Set state trajectory matching C++ SetState.
-
-        Args:
-            x: State vector
-            n: State dimension
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         self._assert_initialized()
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
 
@@ -369,14 +257,6 @@ class ALTROSolver:
             self.solver.data[k].x_ = x
 
     def set_input(self, u: Array, m: int, k_start: int = ALL_INDICES, k_stop: int = 0) -> None:
-        """Set input trajectory matching C++ SetInput.
-
-        Args:
-            u: Input vector
-            m: Input dimension
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         self._assert_initialized()
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, False)
 
@@ -385,79 +265,55 @@ class ALTROSolver:
             self.solver.data[k].u_ = u
 
     def open_loop_rollout(self) -> None:
-        """Perform open loop rollout matching C++ OpenLoopRollout."""
         self.solver.open_loop_rollout()
 
     def set_options(self, opts: AltroOptions) -> None:
-        """Set solver options matching C++ SetOptions."""
         self.solver.opts = opts
 
     def get_options(self) -> AltroOptions:
-        """Get solver options matching C++ GetOptions."""
         return self.solver.opts
 
     def set_callback(self, callback: CallbackFunction) -> None:
-        """Set callback function matching C++ SetCallback."""
         self._callback_function = callback
 
     def solve(self) -> SolveStatus:
-        """Solve trajectory optimization problem matching C++ Solve."""
         self.solver.solve()
         return self.solver.stats.status
 
     def get_status(self) -> SolveStatus:
-        """Get solver status matching C++ GetStatus."""
         return self.solver.stats.status
 
     def get_iterations(self) -> int:
-        """Get number of iterations matching C++ GetIterations."""
         return self.solver.stats.iterations
 
     def get_solve_time_ms(self) -> Float:
-        """Get solve time in milliseconds matching C++ GetSolveTimeMs."""
         return self.solver.stats.solve_time
 
     def get_primal_feasibility(self) -> Float:
-        """Get primal feasibility matching C++ GetPrimalFeasibility."""
         return self.solver.stats.primal_feasibility
 
     def get_final_objective(self) -> Float:
-        """Get final objective value matching C++ GetFinalObjective."""
         return self.solver.stats.objective_value
 
     def calc_cost(self) -> Float:
-        """Calculate cost matching C++ CalcCost."""
         return self.solver.calc_cost()
 
     def get_horizon_length(self) -> int:
-        """Get horizon length matching C++ GetHorizonLength."""
         return self.solver.horizon_length
 
     def get_state_dim(self, k: int) -> int:
-        """Get state dimension at knot point matching C++ GetStateDim."""
         return self.solver.data[k].get_state_dim()
 
     def get_input_dim(self, k: int) -> int:
-        """Get input dimension at knot point matching C++ GetInputDim."""
         return self.solver.data[k].get_input_dim()
 
     def get_time_step(self, k: int) -> Float:
-        """Get time step at knot point matching C++ GetTimeStep."""
         return self.solver.h[k]
 
     def is_initialized(self) -> bool:
-        """Check if solver is initialized matching C++ IsInitialized."""
         return self.solver.is_initialized_fn()
 
     def get_state(self, k: int) -> Array:
-        """Get state at knot point matching C++ GetState.
-
-        Args:
-            k: Knot point index
-
-        Returns:
-            State vector at knot point k
-        """
         k_stop = k + 1
         self._check_knot_point_indices(k, k_stop, True)
         self._assert_dimensions_are_set(k, k_stop)
@@ -470,14 +326,6 @@ class ALTROSolver:
         return state
 
     def get_input(self, k: int) -> Array:
-        """Get input at knot point matching C++ GetInput.
-
-        Args:
-            k: Knot point index
-
-        Returns:
-            Input vector at knot point k
-        """
         k_stop = k + 1
         self._check_knot_point_indices(k, k_stop, False)
         self._assert_dimensions_are_set(k, k_stop)
@@ -490,14 +338,6 @@ class ALTROSolver:
         return input_val
 
     def get_dual_dynamics(self, k: int) -> Array:
-        """Get dynamics dual at knot point matching C++ GetDualDynamics.
-
-        Args:
-            k: Knot point index
-
-        Returns:
-            Dual variable vector at knot point k
-        """
         k_stop = k + 1
         self._check_knot_point_indices(k, k_stop, True)
         self._assert_dimensions_are_set(k, k_stop)
@@ -517,15 +357,6 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Update linear costs for MPC matching C++ UpdateLinearCosts.
-
-        Args:
-            q: Linear state cost (can be None)
-            r: Linear input cost (can be None)
-            c: Constant cost
-            k_start: Starting knot point index
-            k_stop: Ending knot point index (non-inclusive)
-        """
         self._assert_initialized()
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
 
@@ -539,7 +370,6 @@ class ALTROSolver:
                 )
 
     def shift_trajectory(self) -> None:
-        """Shift trajectory for MPC matching C++ ShiftTrajectory."""
         N = self.get_horizon_length()
 
         for k in range(N):
@@ -548,7 +378,6 @@ class ALTROSolver:
                 self.solver.data[k].u_ = self.solver.data[k + 1].u_
 
     def print_state_trajectory(self) -> None:
-        """Print state trajectory matching C++ PrintStateTrajectory."""
         print("STATE TRAJECTORY:")
         for k in range(self.get_horizon_length() + 1):
             print(f" x[{k:03d}]: {self.solver.data[k].x_}")
@@ -562,7 +391,6 @@ class ALTROSolver:
     def _check_knot_point_indices(
         self, k_start: int, k_stop: int, inclusive: bool
     ) -> tuple[int, int]:
-        """Check and normalize knot point indices matching C++ CheckKnotPointIndices."""
         # Determine terminal index
         terminal_index = self.get_horizon_length()
         if not inclusive:
