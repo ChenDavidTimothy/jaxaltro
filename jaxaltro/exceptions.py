@@ -1,3 +1,9 @@
+"""Exception hierarchy for JAX-based ALTRO trajectory optimization.
+
+This module provides the exception classes that directly correspond to the C++
+error handling system, maintaining identical error categorization and messaging.
+"""
+
 from __future__ import annotations
 
 from typing import NoReturn
@@ -6,6 +12,11 @@ from .types import ErrorCode
 
 
 class AltroError(Exception):
+    """Base exception class for ALTRO trajectory optimization errors.
+
+    Corresponds to C++ AltroErrorException base class.
+    """
+
     def __init__(self, message: str, error_code: ErrorCode) -> None:
         super().__init__(message)
         self.error_code = error_code
@@ -16,11 +27,15 @@ class AltroError(Exception):
 
 
 class DimensionError(AltroError):
+    """Exception for dimension-related errors."""
+
     def __init__(self, message: str, error_code: ErrorCode = ErrorCode.DIMENSION_MISMATCH) -> None:
         super().__init__(message, error_code)
 
 
 class InitializationError(AltroError):
+    """Exception for solver initialization errors."""
+
     def __init__(
         self, message: str, error_code: ErrorCode = ErrorCode.SOLVER_NOT_INITIALIZED
     ) -> None:
@@ -28,6 +43,8 @@ class InitializationError(AltroError):
 
 
 class OptimizationError(AltroError):
+    """Exception for optimization algorithm errors."""
+
     def __init__(self, message: str, error_code: ErrorCode) -> None:
         super().__init__(message, error_code)
 
@@ -42,6 +59,7 @@ class ConstraintError(AltroError):
 
 
 def _error_code_to_string(error_code: ErrorCode) -> str:
+    """Convert error code to descriptive string matching C++ ErrorCodeToString."""
     error_messages = {
         ErrorCode.NO_ERROR: "no error",
         ErrorCode.STATE_DIM_UNKNOWN: "state dimension unknown",
@@ -74,8 +92,10 @@ def _error_code_to_string(error_code: ErrorCode) -> str:
 
 
 def _print_error_code(error_code: ErrorCode) -> None:
+    """Print error code information matching C++ PrintErrorCode."""
     print(f"Got error code {error_code.value}: {_error_code_to_string(error_code)}")
 
 
 def _altro_throw(message: str, error_code: ErrorCode) -> NoReturn:
+    """Throw ALTRO exception matching C++ ALTRO_THROW macro behavior."""
     raise AltroError(message, error_code)

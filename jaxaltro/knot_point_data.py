@@ -484,30 +484,39 @@ class KnotPointData:
         self.is_initialized = True
 
     def get_state_dim(self) -> int:
+        """Get state dimension."""
         return self.num_states
 
     def get_input_dim(self) -> int:
+        """Get input dimension."""
         return self.num_inputs
 
     def get_next_state_dim(self) -> int:
+        """Get next state dimension."""
         return self.num_next_states
 
     def get_time_step(self) -> Float:
+        """Get time step."""
         return self.timestep
 
     def is_terminal_knot_point(self) -> bool:
+        """Check if this is the terminal knot point."""
         return self.is_terminal
 
     def num_constraints(self) -> int:
+        """Get number of constraints."""
         return len(self.constraint_functions)
 
     def dynamics_are_linear_fn(self) -> bool:
+        """Check if dynamics are linear."""
         return self.dynamics_are_linear
 
     def cost_function_is_quadratic(self) -> bool:
+        """Check if cost function is quadratic."""
         return self.cost_function_type != CostFunctionType.GENERIC
 
     def calc_dynamics(self, x_next: Array) -> Array:
+        """Calculate dynamics matching C++ CalcDynamics."""
         if self.is_terminal:
             _altro_throw(
                 "Cannot calculate dynamics at terminal knot point",
@@ -528,6 +537,7 @@ class KnotPointData:
             return self.dynamics_function(self.x_, self.u_, self.timestep)
 
     def calc_dynamics_expansion(self) -> None:
+        """Calculate dynamics expansion matching C++ CalcDynamicsExpansion."""
         if self.is_terminal:
             return
 
@@ -552,6 +562,7 @@ class KnotPointData:
             self.f_ = jnp.zeros_like(self.f_)
 
     def calc_cost(self) -> Float:
+        """Calculate cost including Augmented Lagrangian terms matching C++ CalcCost."""
         # Original cost
         cost = self._calc_original_cost()
 
@@ -562,6 +573,7 @@ class KnotPointData:
         return cost + al_cost
 
     def calc_cost_gradient(self) -> None:
+        """Calculate cost gradient matching C++ CalcCostGradient."""
         # Original cost gradient
         self._calc_original_cost_gradient()
 
@@ -569,6 +581,7 @@ class KnotPointData:
         self._calc_constraint_cost_gradients()
 
     def calc_cost_hessian(self) -> None:
+        """Calculate cost Hessian matching C++ CalcCostHessian."""
         # Original cost Hessian
         self._calc_original_cost_hessian()
 
@@ -576,18 +589,21 @@ class KnotPointData:
         self._calc_constraint_cost_hessians()
 
     def calc_constraints(self) -> None:
+        """Calculate constraints matching C++ CalcConstraints."""
         assert self.x_ is not None
         assert self.u_ is not None
         for j, constraint_func in enumerate(self.constraint_functions):
             self.constraint_vals[j] = constraint_func(self.x_, self.u_)
 
     def calc_constraint_jacobians(self) -> None:
+        """Calculate constraint Jacobians matching C++ CalcConstraintJacobians."""
         assert self.x_ is not None
         assert self.u_ is not None
         for j, constraint_jac in enumerate(self.constraint_jacobians):
             self.constraint_jacs[j] = constraint_jac(self.x_, self.u_)
 
     def calc_violations(self) -> Float:
+        """Calculate constraint violations matching C++ CalcViolations."""
         viol = 0.0
         for j in range(len(self.constraint_functions)):
             cone = self.constraint_types[j]
@@ -599,15 +615,18 @@ class KnotPointData:
         return viol
 
     def dual_update(self) -> None:
+        """Update dual variables matching C++ DualUpdate."""
         for j in range(len(self.constraint_functions)):
             # Set dual to projected dual (computed when calculating cost)
             self.dual_variables[j] = self.projected_duals[j]
 
     def penalty_update(self, scaling: Float, penalty_max: Float) -> None:
+        """Update penalty parameters matching C++ PenaltyUpdate."""
         for j in range(len(self.constraint_functions)):
             self.penalty_parameters[j] = min(self.penalty_parameters[j] * scaling, penalty_max)
 
     def _calc_projected_duals(self) -> None:
+        """Calculate projected duals matching C++ CalcProjectedDuals."""
         for j in range(len(self.constraint_functions)):
             dual_cone_type = dual_cone(self.constraint_types[j])
 
@@ -618,6 +637,7 @@ class KnotPointData:
             self.projected_duals[j] = conic_projection(dual_cone_type, z_est)
 
     def _calc_constraint_costs(self) -> Float:
+        """Calculate Augmented Lagrangian constraint costs matching C++ CalcConstraintCosts."""
         self._calc_projected_duals()
 
         cost = 0.0
@@ -627,6 +647,9 @@ class KnotPointData:
         return cost
 
     def _calc_constraint_cost_gradients(self) -> None:
+        """Calculate constraint cost gradients matching C++ CalcConstraintCostGradients."""
+        # Assumes the constraints and Jacobians have been evaluated
+        # Assumes the projected duals have already been calculated
         self._calc_conic_jacobians()
 
         n = self.get_state_dim()
@@ -650,6 +673,10 @@ class KnotPointData:
                 self.lu_ = self.lu_ - constraint_grad_u
 
     def _calc_constraint_cost_hessians(self) -> None:
+        """Calculate constraint cost Hessians matching C++ CalcConstraintCostHessians."""
+        # Assumes the constraints and Jacobians have been evaluated
+        # Assumes the projected duals have already been calculated
+        # Assumes the projected Jacobian has already been calculated
         self._calc_conic_hessians()
 
         n = self.get_state_dim()
@@ -672,6 +699,7 @@ class KnotPointData:
                 self.lux_ = self.lux_ + self.constraint_hessians[j][n : n + m, :n]
 
     def _calc_conic_jacobians(self) -> None:
+        """Calculate conic Jacobians matching C++ CalcConicJacobians."""
         for j in range(len(self.constraint_functions)):
             dual_cone_type = dual_cone(self.constraint_types[j])
             z_est = self.dual_variables[j] - self.penalty_parameters[j] * self.constraint_vals[j]
@@ -683,6 +711,7 @@ class KnotPointData:
             self.projected_duals[j] = proj_jac.T @ self.projected_duals[j]
 
     def _calc_conic_hessians(self) -> None:
+        """Calculate conic Hessians matching C++ CalcConicHessians."""
         for j in range(len(self.constraint_functions)):
             dual_cone_type = dual_cone(self.constraint_types[j])
             z_est = self.dual_variables[j] - self.penalty_parameters[j] * self.constraint_vals[j]
@@ -703,6 +732,7 @@ class KnotPointData:
                 )
 
     def _calc_original_cost(self) -> Float:
+        """Calculate original cost matching C++ CalcOriginalCost."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 
@@ -746,6 +776,7 @@ class KnotPointData:
         return 0.0  # Added to satisfy type checker; should never be reached
 
     def _calc_original_cost_gradient(self) -> None:
+        """Calculate original cost gradient matching C++ CalcOriginalCostGradient."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 
@@ -779,6 +810,7 @@ class KnotPointData:
                 self.lu_ = self.R[:m] * self.u_ + self.r
 
     def _calc_original_cost_hessian(self) -> None:
+        """Calculate original cost Hessian matching C++ CalcOriginalCostHessian."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 

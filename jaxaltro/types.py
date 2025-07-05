@@ -1,3 +1,9 @@
+"""Core type definitions for JAX-based ALTRO trajectory optimization.
+
+This module provides JAX-compatible type aliases and enums that directly correspond
+to the C++ implementation's type system.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

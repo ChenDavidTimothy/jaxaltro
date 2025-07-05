@@ -1,3 +1,9 @@
+"""Constraint cone projections for JAX-based ALTRO trajectory optimization.
+
+This module provides cone projection algorithms that directly correspond to the C++
+cones.hpp/cpp implementation, maintaining identical mathematical behavior.
+"""
+
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -8,6 +14,7 @@ from .types import ConstraintType
 
 
 def dual_cone(cone: ConstraintType) -> ConstraintType:
+    """Get dual cone type matching C++ DualCone function."""
     dual_cone_map = {
         ConstraintType.EQUALITY: ConstraintType.IDENTITY,
         ConstraintType.INEQUALITY: ConstraintType.INEQUALITY,
@@ -18,6 +25,7 @@ def dual_cone(cone: ConstraintType) -> ConstraintType:
 
 
 def conic_projection_is_linear(cone: ConstraintType) -> bool:
+    """Check if conic projection is linear matching C++ ConicProjectionIsLinear."""
     linear_cones = {
         ConstraintType.EQUALITY,
         ConstraintType.IDENTITY,
@@ -27,6 +35,10 @@ def conic_projection_is_linear(cone: ConstraintType) -> bool:
 
 
 def _second_order_cone_projection(x: Array) -> Array:
+    """Project onto second-order cone matching C++ SecondOrderConeProjection.
+
+    Assumes x is stacked as [v; s] where ||v|| <= s defines the cone.
+    """
     n = x.shape[0] - 1  # dimension of v
     v = x[:n]
     s = x[n]
@@ -58,6 +70,7 @@ def _second_order_cone_projection(x: Array) -> Array:
 
 
 def _second_order_cone_jacobian(x: Array) -> Array:
+    """Compute Jacobian of second-order cone projection matching C++ SecondOrderConeJacobian."""
     n = x.shape[0] - 1
     v = x[:n]
     s = x[n]
@@ -96,6 +109,7 @@ def _second_order_cone_jacobian(x: Array) -> Array:
 
 
 def _second_order_cone_hessian(x: Array, b: Array) -> Array:
+    """Compute Hessian of second-order cone projection matching C++ SecondOrderConeHessian."""
     n = x.shape[0] - 1
     v = x[:n]
     s = x[n]
@@ -153,6 +167,7 @@ def _second_order_cone_hessian(x: Array, b: Array) -> Array:
 
 
 def conic_projection(cone: ConstraintType, x: Array) -> Array:
+    """Project vector onto specified cone matching C++ ConicProjection."""
     if cone == ConstraintType.EQUALITY:
         # Zero cone
         return jnp.zeros_like(x)
@@ -169,6 +184,7 @@ def conic_projection(cone: ConstraintType, x: Array) -> Array:
 
 
 def conic_projection_jacobian(cone: ConstraintType, x: Array) -> Array:
+    """Compute Jacobian of conic projection matching C++ ConicProjectionJacobian."""
     if cone == ConstraintType.EQUALITY:
         return jnp.zeros((x.shape[0], x.shape[0]))
     elif cone == ConstraintType.IDENTITY:
@@ -182,6 +198,7 @@ def conic_projection_jacobian(cone: ConstraintType, x: Array) -> Array:
 
 
 def conic_projection_hessian(cone: ConstraintType, x: Array, b: Array) -> Array:
+    """Compute Hessian of conic projection matching C++ ConicProjectionHessian."""
     if cone in [ConstraintType.EQUALITY, ConstraintType.IDENTITY, ConstraintType.INEQUALITY]:
         return jnp.zeros((x.shape[0], x.shape[0]))
     elif cone == ConstraintType.SECOND_ORDER_CONE:

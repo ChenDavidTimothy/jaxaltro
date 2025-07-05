@@ -1,3 +1,9 @@
+"""Time-Varying Linear Quadratic Regulator for JAX-based ALTRO.
+
+This module provides TVLQR functionality that directly corresponds to the C++
+tvlqr.h/cpp implementation, maintaining identical mathematical behavior.
+"""
+
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -26,6 +32,32 @@ def _tvlqr_backward_pass(
     reg: Float,
     is_diag: bool = False,
 ) -> tuple[list[Array], list[Array], list[Array], list[Array], Array, int]:
+    """Backward pass for TVLQR matching C++ tvlqr_BackwardPass.
+
+    Args:
+        nx: State dimensions at each time step
+        nu: Control dimensions at each time step
+        num_horizon: Number of time steps
+        A: Dynamics Jacobian matrices (wrt state)
+        B: Dynamics Jacobian matrices (wrt control)
+        f: Affine dynamics terms
+        Q: State cost matrices
+        R: Control cost matrices
+        H: Cross-term cost matrices
+        q: Linear state cost terms
+        r: Linear control cost terms
+        reg: Regularization parameter
+        is_diag: Whether cost matrices are diagonal
+
+    Returns:
+        Tuple of (K, d, P, p, delta_V, status_code)
+        K: Feedback gain matrices
+        d: Feedforward terms
+        P: Cost-to-go matrices
+        p: Cost-to-go vectors
+        delta_V: Expected cost reduction
+        status_code: Success/failure indicator
+    """
     N = num_horizon
 
     # Initialize storage
@@ -137,6 +169,27 @@ def _tvlqr_forward_pass(
     p: list[Array],
     x0: Array,
 ) -> tuple[list[Array], list[Array], list[Array]]:
+    """Forward pass for TVLQR matching C++ tvlqr_ForwardPass.
+
+    Args:
+        nx: State dimensions at each time step
+        nu: Control dimensions at each time step
+        num_horizon: Number of time steps
+        A: Dynamics Jacobian matrices (wrt state)
+        B: Dynamics Jacobian matrices (wrt control)
+        f: Affine dynamics terms
+        K: Feedback gain matrices
+        d: Feedforward terms
+        P: Cost-to-go matrices
+        p: Cost-to-go vectors
+        x0: Initial state
+
+    Returns:
+        Tuple of (x, u, y)
+        x: State trajectory
+        u: Control trajectory
+        y: Dual variable trajectory
+    """
     N = num_horizon
 
     # Initialize trajectories
@@ -179,6 +232,32 @@ def tvlqr_backward_pass(
     reg: Float,
     is_diag: bool = False,
 ) -> tuple[list[Array], list[Array], list[Array], list[Array], Array, int]:
+    """Perform backward pass for time-varying LQR problem.
+
+    Args:
+        nx: State dimensions at each time step
+        nu: Control dimensions at each time step
+        num_horizon: Number of time steps
+        A: Dynamics Jacobian matrices (wrt state)
+        B: Dynamics Jacobian matrices (wrt control)
+        f: Affine dynamics terms
+        Q: State cost matrices
+        R: Control cost matrices
+        H: Cross-term cost matrices
+        q: Linear state cost terms
+        r: Linear control cost terms
+        reg: Regularization parameter
+        is_diag: Whether cost matrices are diagonal
+
+    Returns:
+        Tuple of (K, d, P, p, delta_V, status_code)
+        K: Feedback gain matrices
+        d: Feedforward terms
+        P: Cost-to-go matrices
+        p: Cost-to-go vectors
+        delta_V: Expected cost reduction
+        status_code: Success/failure indicator (TVLQR_SUCCESS or knot point index)
+    """
     return _tvlqr_backward_pass(nx, nu, num_horizon, A, B, f, Q, R, H, q, r, reg, is_diag)
 
 
@@ -195,6 +274,27 @@ def tvlqr_forward_pass(
     p: list[Array],
     x0: Array,
 ) -> tuple[list[Array], list[Array], list[Array]]:
+    """Perform forward pass for time-varying LQR problem.
+
+    Args:
+        nx: State dimensions at each time step
+        nu: Control dimensions at each time step
+        num_horizon: Number of time steps
+        A: Dynamics Jacobian matrices (wrt state)
+        B: Dynamics Jacobian matrices (wrt control)
+        f: Affine dynamics terms
+        K: Feedback gain matrices
+        d: Feedforward terms
+        P: Cost-to-go matrices
+        p: Cost-to-go vectors
+        x0: Initial state
+
+    Returns:
+        Tuple of (x, u, y)
+        x: State trajectory
+        u: Control trajectory
+        y: Dual variable trajectory
+    """
     return _tvlqr_forward_pass(nx, nu, num_horizon, A, B, f, K, d, P, p, x0)
 
 
