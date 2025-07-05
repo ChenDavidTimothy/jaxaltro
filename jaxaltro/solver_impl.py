@@ -20,6 +20,24 @@ from .tvlqr import TVLQR_SUCCESS, tvlqr_backward_pass, tvlqr_forward_pass
 from .types import Float, SolveStatus
 
 
+def _require_initialized_array(arr: Array | None, context: str) -> Array:
+    """Validate array is initialized matching C++ pointer validation pattern.
+
+    Args:
+        arr: Array that may be None
+        context: Descriptive context for error messages
+
+    Returns:
+        Validated non-None array
+
+    Raises:
+        AltroException: If array is None with detailed context
+    """
+    if arr is None:
+        _altro_throw(f"Array not initialized: {context}", ErrorCode.SOLVER_NOT_INITIALIZED)
+    return arr
+
+
 class SolverImpl:
     """Core ALTRO solver implementation matching C++ SolverImpl class."""
 
@@ -66,119 +84,6 @@ class SolverImpl:
         # Expected cost reduction
         self.delta_V = jnp.zeros(2)
 
-    def _assert_initialized(self) -> None:
-        """Assert solver is initialized for computational operations."""
-        if not self.is_initialized:
-            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
-
-    def _get_non_none_arrays_for_tvlqr_backward(
-        self,
-    ) -> tuple[
-        list[Array],
-        list[Array],
-        list[Array],
-        list[Array],
-        list[Array],
-        list[Array],
-        list[Array],
-        list[Array],
-    ]:
-        """Get non-None arrays for TVLQR backward pass with proper type checking."""
-        self._assert_initialized()
-        N = self.horizon_length
-
-        A_list: list[Array] = []
-        B_list: list[Array] = []
-        f_list: list[Array] = []
-        Q_list: list[Array] = []
-        R_list: list[Array] = []
-        H_list: list[Array] = []
-        q_list: list[Array] = []
-        r_list: list[Array] = []
-
-        # Collect dynamics arrays
-        for k in range(N):
-            if self.data[k].A_ is None or self.data[k].B_ is None or self.data[k].f_ is None:
-                _altro_throw(
-                    f"Dynamics arrays not initialized at knot point {k}",
-                    ErrorCode.SOLVER_NOT_INITIALIZED,
-                )
-            A_list.append(self.data[k].A_)
-            B_list.append(self.data[k].B_)
-            f_list.append(self.data[k].f_)
-
-        # Collect cost arrays
-        for k in range(N + 1):
-            if self.data[k].lxx_ is None or self.data[k].lx_ is None:
-                _altro_throw(
-                    f"Cost arrays not initialized at knot point {k}",
-                    ErrorCode.SOLVER_NOT_INITIALIZED,
-                )
-            Q_list.append(self.data[k].lxx_)
-            q_list.append(self.data[k].lx_)
-
-            if k < N:
-                if (
-                    self.data[k].luu_ is None
-                    or self.data[k].lux_ is None
-                    or self.data[k].lu_ is None
-                ):
-                    _altro_throw(
-                        f"Control cost arrays not initialized at knot point {k}",
-                        ErrorCode.SOLVER_NOT_INITIALIZED,
-                    )
-                R_list.append(self.data[k].luu_)
-                H_list.append(self.data[k].lux_)
-                r_list.append(self.data[k].lu_)
-
-        return A_list, B_list, f_list, Q_list, R_list, H_list, q_list, r_list
-
-    def _get_non_none_arrays_for_tvlqr_forward(
-        self,
-    ) -> tuple[
-        list[Array], list[Array], list[Array], list[Array], list[Array], list[Array], list[Array]
-    ]:
-        """Get non-None arrays for TVLQR forward pass with proper type checking."""
-        self._assert_initialized()
-        N = self.horizon_length
-
-        A_list: list[Array] = []
-        B_list: list[Array] = []
-        f_list: list[Array] = []
-        K_list: list[Array] = []
-        d_list: list[Array] = []
-        P_list: list[Array] = []
-        p_list: list[Array] = []
-
-        for k in range(N):
-            if (
-                self.data[k].A_ is None
-                or self.data[k].B_ is None
-                or self.data[k].f_ is None
-                or self.data[k].K_ is None
-                or self.data[k].d_ is None
-            ):
-                _altro_throw(
-                    f"TVLQR arrays not initialized at knot point {k}",
-                    ErrorCode.SOLVER_NOT_INITIALIZED,
-                )
-            A_list.append(self.data[k].A_)
-            B_list.append(self.data[k].B_)
-            f_list.append(self.data[k].f_)
-            K_list.append(self.data[k].K_)
-            d_list.append(self.data[k].d_)
-
-        for k in range(N + 1):
-            if self.data[k].P_ is None or self.data[k].p_ is None:
-                _altro_throw(
-                    f"Cost-to-go arrays not initialized at knot point {k}",
-                    ErrorCode.SOLVER_NOT_INITIALIZED,
-                )
-            P_list.append(self.data[k].P_)
-            p_list.append(self.data[k].p_)
-
-        return A_list, B_list, f_list, K_list, d_list, P_list, p_list
-
     def initialize(self) -> None:
         """Initialize solver matching C++ Initialize."""
         # Initialize each knot point
@@ -200,7 +105,8 @@ class SolverImpl:
 
     def solve(self) -> None:
         """Main solve loop matching C++ Solve."""
-        self._assert_initialized()
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
         # Configure line search
         self.line_search.use_backtracking_linesearch = self.opts.use_backtracking_linesearch
@@ -319,16 +225,50 @@ class SolverImpl:
 
     def backward_pass(self) -> ErrorCode:
         """Backward pass using TVLQR matching C++ BackwardPass."""
+        if not self.is_initialized:
+            return ErrorCode.SOLVER_NOT_INITIALIZED
+
         N = self.horizon_length
 
-        # Get arrays with proper type checking
+        # Prepare data for TVLQR with proper validation - matching C++ initialization pattern
         nx_list = [self.data[k].get_state_dim() for k in range(N + 1)]
         nu_list = [self.data[k].get_input_dim() for k in range(N)]
 
-        # Get non-None arrays for TVLQR
-        A_list, B_list, f_list, Q_list, R_list, H_list, q_list, r_list = (
-            self._get_non_none_arrays_for_tvlqr_backward()
-        )
+        # Validate and extract arrays for backward pass
+        A_list = [
+            _require_initialized_array(self.data[k].A_, f"dynamics A matrix at knot point {k}")
+            for k in range(N)
+        ]
+        B_list = [
+            _require_initialized_array(self.data[k].B_, f"dynamics B matrix at knot point {k}")
+            for k in range(N)
+        ]
+        f_list = [
+            _require_initialized_array(self.data[k].f_, f"dynamics f vector at knot point {k}")
+            for k in range(N)
+        ]
+
+        Q_list = [
+            _require_initialized_array(self.data[k].lxx_, f"cost Hessian lxx at knot point {k}")
+            for k in range(N + 1)
+        ]
+        q_list = [
+            _require_initialized_array(self.data[k].lx_, f"cost gradient lx at knot point {k}")
+            for k in range(N + 1)
+        ]
+
+        R_list = [
+            _require_initialized_array(self.data[k].luu_, f"cost Hessian luu at knot point {k}")
+            for k in range(N)
+        ]
+        H_list = [
+            _require_initialized_array(self.data[k].lux_, f"cost Hessian lux at knot point {k}")
+            for k in range(N)
+        ]
+        r_list = [
+            _require_initialized_array(self.data[k].lu_, f"cost gradient lu at knot point {k}")
+            for k in range(N)
+        ]
 
         # Perform backward pass
         K_list, d_list, P_list, p_list, delta_V, status = tvlqr_backward_pass(
@@ -406,12 +346,16 @@ class SolverImpl:
 
     def merit_function(self, alpha: Float) -> tuple[Float, Float]:
         """Merit function evaluation matching C++ MeritFunction."""
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+
         N = self.horizon_length
 
         phi = 0.0
         dphi = 0.0
 
-        # Set initial state
+        # Validate and set initial state
+        _require_initialized_array(self.data[0].x_, "initial state x_[0]")
         self.data[0].x_ = self.initial_state
         self.data[0].dx_da_ = jnp.zeros_like(self.initial_state)
 
@@ -420,23 +364,30 @@ class SolverImpl:
             knot_point = self.data[k]
             next_knot_point = self.data[k + 1]
 
-            # Assert arrays are properly initialized
-            knot_point._assert_arrays_non_none()
-            assert knot_point.x_ is not None
-            assert knot_point.x is not None
-            assert knot_point.K_ is not None
-            assert knot_point.d_ is not None
-            assert knot_point.P_ is not None
-            assert knot_point.p_ is not None
+            # Validate and extract required arrays for merit function computation
+            current_state = _require_initialized_array(knot_point.x_, f"current state x_[{k}]")
+            ref_state = _require_initialized_array(knot_point.x, f"reference state x[{k}]")
+            ref_input = _require_initialized_array(knot_point.u, f"reference input u[{k}]")
+            feedback_gain = _require_initialized_array(knot_point.K_, f"feedback gain K_[{k}]")
+            feedforward_term = _require_initialized_array(
+                knot_point.d_, f"feedforward term d_[{k}]"
+            )
+            cost_to_go_matrix = _require_initialized_array(
+                knot_point.P_, f"cost-to-go matrix P_[{k}]"
+            )
+            cost_to_go_vector = _require_initialized_array(
+                knot_point.p_, f"cost-to-go vector p_[{k}]"
+            )
+            next_state = _require_initialized_array(next_knot_point.x_, f"next state x_[{k + 1}]")
 
             # Compute control
-            dx = knot_point.x_ - knot_point.x
-            du = -knot_point.K_ @ dx + alpha * knot_point.d_
-            knot_point.u_ = knot_point.u + du
-            knot_point.y_ = knot_point.P_ @ dx + knot_point.p_
+            dx = current_state - ref_state
+            du = -feedback_gain @ dx + alpha * feedforward_term
+            knot_point.u_ = ref_input + du
+            knot_point.y_ = cost_to_go_matrix @ dx + cost_to_go_vector
 
             # Simulate forward
-            next_knot_point.x_ = knot_point.calc_dynamics(next_knot_point.x_)
+            next_knot_point.x_ = knot_point.calc_dynamics(next_state)
 
             # Calculate cost
             knot_point.calc_constraints()
@@ -446,47 +397,63 @@ class SolverImpl:
             # Calculate gradient wrt alpha
             knot_point.calc_dynamics_expansion()
 
-            assert knot_point.K_ is not None
-            assert knot_point.dx_da_ is not None
-            assert knot_point.A_ is not None
-            assert knot_point.B_ is not None
-
-            knot_point.du_da_ = -knot_point.K_ @ knot_point.dx_da_ + knot_point.d_
-            next_knot_point.dx_da_ = (
-                knot_point.A_ @ knot_point.dx_da_ + knot_point.B_ @ knot_point.du_da_
+            # Validate gradient computation arrays
+            dynamics_A = _require_initialized_array(knot_point.A_, f"dynamics Jacobian A_[{k}]")
+            dynamics_B = _require_initialized_array(knot_point.B_, f"dynamics Jacobian B_[{k}]")
+            state_sensitivity = _require_initialized_array(
+                knot_point.dx_da_, f"state sensitivity dx_da_[{k}]"
             )
+
+            knot_point.du_da_ = -feedback_gain @ state_sensitivity + feedforward_term
+            next_knot_point.dx_da_ = dynamics_A @ state_sensitivity + dynamics_B @ knot_point.du_da_
 
             # Calculate cost gradient
             knot_point.calc_constraint_jacobians()
             knot_point.calc_cost_gradient()
 
-            assert knot_point.lx_ is not None
-            assert knot_point.lu_ is not None
+            # Validate cost gradient arrays
+            cost_grad_state = _require_initialized_array(knot_point.lx_, f"cost gradient lx_[{k}]")
+            cost_grad_input = _require_initialized_array(knot_point.lu_, f"cost gradient lu_[{k}]")
 
-            dphi += float(knot_point.lx_.T @ knot_point.dx_da_)
-            dphi += float(knot_point.lu_.T @ knot_point.du_da_)
+            dphi += float(cost_grad_state.T @ state_sensitivity)
+            dphi += float(cost_grad_input.T @ knot_point.du_da_)
 
         # Terminal knot point
-        knot_point = self.data[N]
-        knot_point.calc_constraints()
-        cost = knot_point.calc_cost()
+        terminal_knot_point = self.data[N]
+
+        # Validate terminal knot point arrays
+        terminal_current_state = _require_initialized_array(
+            terminal_knot_point.x_, f"terminal current state x_[{N}]"
+        )
+        terminal_ref_state = _require_initialized_array(
+            terminal_knot_point.x, f"terminal reference state x[{N}]"
+        )
+        terminal_cost_to_go_matrix = _require_initialized_array(
+            terminal_knot_point.P_, f"terminal cost-to-go matrix P_[{N}]"
+        )
+        terminal_cost_to_go_vector = _require_initialized_array(
+            terminal_knot_point.p_, f"terminal cost-to-go vector p_[{N}]"
+        )
+
+        terminal_knot_point.calc_constraints()
+        cost = terminal_knot_point.calc_cost()
         phi += cost
 
-        assert knot_point.x_ is not None
-        assert knot_point.x is not None
-        assert knot_point.P_ is not None
-        assert knot_point.p_ is not None
+        dx = terminal_current_state - terminal_ref_state
+        terminal_knot_point.y_ = terminal_cost_to_go_matrix @ dx + terminal_cost_to_go_vector
 
-        dx = knot_point.x_ - knot_point.x
-        knot_point.y_ = knot_point.P_ @ dx + knot_point.p_
+        terminal_knot_point.calc_constraint_jacobians()
+        terminal_knot_point.calc_cost_gradient()
 
-        knot_point.calc_constraint_jacobians()
-        knot_point.calc_cost_gradient()
+        # Validate terminal cost gradient arrays
+        terminal_cost_grad = _require_initialized_array(
+            terminal_knot_point.lx_, f"terminal cost gradient lx_[{N}]"
+        )
+        terminal_state_sensitivity = _require_initialized_array(
+            terminal_knot_point.dx_da_, f"terminal state sensitivity dx_da_[{N}]"
+        )
 
-        assert knot_point.lx_ is not None
-        assert knot_point.dx_da_ is not None
-
-        dphi += float(knot_point.lx_.T @ knot_point.dx_da_)
+        dphi += float(terminal_cost_grad.T @ terminal_state_sensitivity)
 
         # Invalidate cached values
         self._invalidate_cache()
@@ -523,30 +490,39 @@ class SolverImpl:
             z = self.data[k]
             zn = self.data[k + 1]
 
-            # Ensure arrays are initialized
-            z._assert_arrays_non_none()
-            zn._assert_arrays_non_none()
-            assert z.lx_ is not None
-            assert z.A_ is not None
-            assert zn.y_ is not None
-            assert z.y_ is not None
-            assert z.lu_ is not None
-            assert z.B_ is not None
+            # Validate arrays for stationarity calculation
+            state_grad = _require_initialized_array(
+                z.lx_, f"state gradient lx_[{k}] for stationarity"
+            )
+            dynamics_A = _require_initialized_array(z.A_, f"dynamics A_[{k}] for stationarity")
+            next_dual = _require_initialized_array(zn.y_, f"next dual y_[{k + 1}] for stationarity")
+            current_dual = _require_initialized_array(
+                z.y_, f"current dual y_[{k}] for stationarity"
+            )
+            input_grad = _require_initialized_array(
+                z.lu_, f"input gradient lu_[{k}] for stationarity"
+            )
+            dynamics_B = _require_initialized_array(z.B_, f"dynamics B_[{k}] for stationarity")
 
             # Convert JAX arrays to scalars for max comparison
-            stationarity_x = float(jnp.max(jnp.abs(z.lx_ + z.A_.T @ zn.y_ - z.y_)))
-            stationarity_u = float(jnp.max(jnp.abs(z.lu_ + z.B_.T @ zn.y_)))
+            stationarity_x = float(
+                jnp.max(jnp.abs(state_grad + dynamics_A.T @ next_dual - current_dual))
+            )
+            stationarity_u = float(jnp.max(jnp.abs(input_grad + dynamics_B.T @ next_dual)))
 
             res_x = max(res_x, stationarity_x)
             res_u = max(res_u, stationarity_u)
 
         # Terminal stationarity
-        z = self.data[N]
-        z._assert_arrays_non_none()
-        assert z.lx_ is not None
-        assert z.y_ is not None
+        terminal_z = self.data[N]
+        terminal_state_grad = _require_initialized_array(
+            terminal_z.lx_, f"terminal state gradient lx_[{N}] for stationarity"
+        )
+        terminal_dual = _require_initialized_array(
+            terminal_z.y_, f"terminal dual y_[{N}] for stationarity"
+        )
 
-        res_x = max(res_x, float(jnp.max(jnp.abs(z.lx_ - z.y_))))
+        res_x = max(res_x, float(jnp.max(jnp.abs(terminal_state_grad - terminal_dual))))
 
         return max(res_x, res_u)
 
@@ -560,28 +536,68 @@ class SolverImpl:
 
     def open_loop_rollout(self) -> None:
         """Open loop rollout matching C++ OpenLoopRollout."""
-        self._assert_initialized()
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
         self.data[0].x_ = self.initial_state
 
         for k in range(self.horizon_length):
-            next_x = self.data[k].calc_dynamics(self.data[k + 1].x_)
+            # Validate current state and initialize next state if needed
+            _require_initialized_array(self.data[k].x_, f"current state x_[{k}] for rollout")
+
+            # Initialize next state if not set
+            if self.data[k + 1].x_ is None:
+                self.data[k + 1].x_ = jnp.zeros(self.data[k + 1].get_state_dim())
+
+            next_state_ref = _require_initialized_array(
+                self.data[k + 1].x_, f"next state reference x_[{k + 1}] for rollout"
+            )
+
+            next_x = self.data[k].calc_dynamics(next_state_ref)
             self.data[k + 1].x_ = next_x
 
         self._invalidate_cache()
 
     def linear_rollout(self) -> None:
         """Linear rollout using TVLQR matching C++ LinearRollout."""
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+
         N = self.horizon_length
 
-        # Get arrays with proper type checking
+        # Prepare data for TVLQR forward pass with validation
         nx_list = [self.data[k].get_state_dim() for k in range(N + 1)]
         nu_list = [self.data[k].get_input_dim() for k in range(N)]
 
-        # Get non-None arrays for TVLQR forward pass
-        A_list, B_list, f_list, K_list, d_list, P_list, p_list = (
-            self._get_non_none_arrays_for_tvlqr_forward()
-        )
+        # Validate and extract arrays for TVLQR forward pass
+        A_list = [
+            _require_initialized_array(self.data[k].A_, f"dynamics A_[{k}] for linear rollout")
+            for k in range(N)
+        ]
+        B_list = [
+            _require_initialized_array(self.data[k].B_, f"dynamics B_[{k}] for linear rollout")
+            for k in range(N)
+        ]
+        f_list = [
+            _require_initialized_array(self.data[k].f_, f"dynamics f_[{k}] for linear rollout")
+            for k in range(N)
+        ]
+        K_list = [
+            _require_initialized_array(self.data[k].K_, f"feedback gain K_[{k}] for linear rollout")
+            for k in range(N)
+        ]
+        d_list = [
+            _require_initialized_array(self.data[k].d_, f"feedforward d_[{k}] for linear rollout")
+            for k in range(N)
+        ]
+        P_list = [
+            _require_initialized_array(self.data[k].P_, f"cost-to-go P_[{k}] for linear rollout")
+            for k in range(N + 1)
+        ]
+        p_list = [
+            _require_initialized_array(self.data[k].p_, f"cost-to-go p_[{k}] for linear rollout")
+            for k in range(N + 1)
+        ]
 
         # Perform forward pass
         x_list, u_list, y_list = tvlqr_forward_pass(
@@ -617,7 +633,8 @@ class SolverImpl:
 
     def dual_update(self) -> None:
         """Update dual variables matching C++ DualUpdate."""
-        self._assert_initialized()
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
         for k in range(self.horizon_length + 1):
             self.data[k].dual_update()
@@ -626,7 +643,8 @@ class SolverImpl:
 
     def penalty_update(self) -> None:
         """Update penalty parameters matching C++ PenaltyUpdate."""
-        self._assert_initialized()
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
         for k in range(self.horizon_length + 1):
             self.data[k].penalty_update(self.opts.penalty_scaling, self.opts.penalty_max)
