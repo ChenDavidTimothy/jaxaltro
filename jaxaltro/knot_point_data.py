@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -35,6 +36,34 @@ from .types import (
 
 # Maximum number of constraints matching C++ kMaxConstraints
 MAX_CONSTRAINTS = 2**31 - 1
+
+
+# ADD these JIT-compiled mathematical helpers:
+
+
+@jax.jit
+def _constraint_cost_jit(projected_dual: Array, penalty_param: Float) -> Array:
+    """JIT-compiled constraint cost contribution."""
+    return jnp.sum(projected_dual**2) / (2 * penalty_param)
+
+
+@jax.jit
+def _dual_estimation_jit(dual_var: Array, penalty_param: Float, constraint_val: Array) -> Array:
+    """JIT-compiled dual variable estimation."""
+    return dual_var - penalty_param * constraint_val
+
+
+@jax.jit
+def _violation_computation_jit(projected: Array, constraint_val: Array) -> Array:
+    """JIT-compiled violation computation."""
+    violation = projected - constraint_val
+    return jnp.max(jnp.abs(violation))
+
+
+@jax.jit
+def _transpose_matrix_vector_product_jit(matrix: Array, vector: Array) -> Array:
+    """JIT-compiled transpose matrix-vector product."""
+    return matrix.T @ vector
 
 
 class CostFunctionType(Enum):
@@ -589,29 +618,39 @@ class KnotPointData:
         self._calc_constraint_cost_hessians()
 
     def calc_constraints(self) -> None:
-        """Calculate constraints matching C++ CalcConstraints."""
+        """Calculate constraints - functions already JIT-compiled individually."""
+        if not self.constraint_functions:
+            return
+
         assert self.x_ is not None
         assert self.u_ is not None
+
+        # Direct evaluation - constraint functions are already JIT-compiled
         for j, constraint_func in enumerate(self.constraint_functions):
             self.constraint_vals[j] = constraint_func(self.x_, self.u_)
 
     def calc_constraint_jacobians(self) -> None:
-        """Calculate constraint Jacobians matching C++ CalcConstraintJacobians."""
+        """Calculate constraint Jacobians - functions already JIT-compiled individually."""
+        if not self.constraint_jacobians:
+            return
+
         assert self.x_ is not None
         assert self.u_ is not None
+
+        # Direct evaluation - jacobian functions are already JIT-compiled
         for j, constraint_jac in enumerate(self.constraint_jacobians):
             self.constraint_jacs[j] = constraint_jac(self.x_, self.u_)
 
     def calc_violations(self) -> Float:
-        """Calculate constraint violations matching C++ CalcViolations."""
+        """Calculate constraint violations with JIT-compiled math operations."""
         viol = 0.0
         for j in range(len(self.constraint_functions)):
             cone = self.constraint_types[j]
             # Project constraint value onto cone
             projected = conic_projection(cone, self.constraint_vals[j])
-            violation = projected - self.constraint_vals[j]
-            viol_j = float(jnp.max(jnp.abs(violation)))
-            viol = max(viol, viol_j)
+            # JIT-compiled violation computation
+            viol_j = _violation_computation_jit(projected, self.constraint_vals[j])
+            viol = max(viol, float(viol_j))
         return viol
 
     def dual_update(self) -> None:
@@ -626,28 +665,41 @@ class KnotPointData:
             self.penalty_parameters[j] = min(self.penalty_parameters[j] * scaling, penalty_max)
 
     def _calc_projected_duals(self) -> None:
-        """Calculate projected duals matching C++ CalcProjectedDuals."""
+        """Calculate projected duals with JIT-compiled math operations."""
+        if not self.constraint_functions:
+            return
+
         for j in range(len(self.constraint_functions)):
             dual_cone_type = dual_cone(self.constraint_types[j])
 
-            # Calculate estimated dual: z - rho * c
-            z_est = self.dual_variables[j] - self.penalty_parameters[j] * self.constraint_vals[j]
+            # JIT-compiled dual estimation
+            z_est = _dual_estimation_jit(
+                self.dual_variables[j], self.penalty_parameters[j], self.constraint_vals[j]
+            )
 
             # Project onto dual cone
             self.projected_duals[j] = conic_projection(dual_cone_type, z_est)
 
     def _calc_constraint_costs(self) -> Float:
-        """Calculate Augmented Lagrangian constraint costs matching C++ CalcConstraintCosts."""
+        """Calculate Augmented Lagrangian constraint costs with JIT-compiled operations."""
+        if not self.constraint_functions:
+            return 0.0
+
         self._calc_projected_duals()
 
         cost = 0.0
         for j in range(len(self.constraint_functions)):
-            cost += float(jnp.sum(self.projected_duals[j] ** 2) / (2 * self.penalty_parameters[j]))
+            # JIT-compiled cost contribution
+            cost_contrib = _constraint_cost_jit(self.projected_duals[j], self.penalty_parameters[j])
+            cost += float(cost_contrib)
 
         return cost
 
     def _calc_constraint_cost_gradients(self) -> None:
-        """Calculate constraint cost gradients matching C++ CalcConstraintCostGradients."""
+        """Calculate constraint cost gradients with optimized operations."""
+        if not self.constraint_functions:
+            return
+
         # Assumes the constraints and Jacobians have been evaluated
         # Assumes the projected duals have already been calculated
         self._calc_conic_jacobians()
@@ -661,16 +713,24 @@ class KnotPointData:
             assert self.lu_ is not None
 
         for j in range(len(self.constraint_functions)):
-            # Gradient contribution: -C^T * proj_jvp
-            constraint_grad_x = self.constraint_jacs[j][:, :n].T @ self.projected_duals[j]
-            self.lx_ = self.lx_ - constraint_grad_x
+            # Split jacobian outside JIT (no dynamic slicing issue)
+            constraint_jac = self.constraint_jacs[j]
+            projected_dual = self.projected_duals[j]
+
+            # Extract state and input parts
+            jac_x = constraint_jac[:, :n]  # State jacobian part
+            jac_u = constraint_jac[:, n : n + m]  # Input jacobian part
+
+            # JIT-compiled matrix operations
+            grad_x = _transpose_matrix_vector_product_jit(jac_x, projected_dual)
+
+            # Accumulate gradients
+            self.lx_ = self.lx_ - grad_x
 
             if not self.is_terminal:
-                constraint_grad_u = (
-                    self.constraint_jacs[j][:, n : n + m].T @ self.projected_duals[j]
-                )
                 assert self.lu_ is not None
-                self.lu_ = self.lu_ - constraint_grad_u
+                grad_u = _transpose_matrix_vector_product_jit(jac_u, projected_dual)
+                self.lu_ = self.lu_ - grad_u
 
     def _calc_constraint_cost_hessians(self) -> None:
         """Calculate constraint cost Hessians matching C++ CalcConstraintCostHessians."""

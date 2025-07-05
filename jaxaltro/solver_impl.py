@@ -150,6 +150,11 @@ class SolverImpl:
             backward_pass_result = self.backward_pass()
             if backward_pass_result != ErrorCode.NO_ERROR:
                 print(f"Backward pass failed: {backward_pass_result}")
+                # ADD THESE LINES to compute stationarity before breaking:
+                stationarity = self.calc_stationarity()
+                feasibility = self.calc_feasibility()
+                self.stats.stationarity = stationarity
+                self.stats.primal_feasibility = feasibility
                 stop_iterating = True
                 break
 
@@ -160,6 +165,11 @@ class SolverImpl:
                 ErrorCode.MERIT_FUNCTION_GRADIENT_TOO_SMALL,
             ]:
                 print(f"Forward pass failed: {forward_pass_result}")
+                # ADD THESE LINES to compute stationarity before breaking:
+                stationarity = self.calc_stationarity()
+                feasibility = self.calc_feasibility()
+                self.stats.stationarity = stationarity
+                self.stats.primal_feasibility = feasibility
                 stop_iterating = True
                 break
 
