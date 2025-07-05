@@ -9,7 +9,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array
 
-from .exceptions import AltroException, ErrorCode
+from .exceptions import AltroError, ErrorCode
 from .types import ConstraintType
 
 
@@ -180,7 +180,7 @@ def conic_projection(cone: ConstraintType, x: Array) -> Array:
     elif cone == ConstraintType.SECOND_ORDER_CONE:
         return _second_order_cone_projection(x)
     else:
-        raise AltroException(f"Unknown cone type: {cone}", ErrorCode.INVALID_CONSTRAINT_DIM)
+        raise AltroError(f"Unknown cone type: {cone}", ErrorCode.INVALID_CONSTRAINT_DIM)
 
 
 def conic_projection_jacobian(cone: ConstraintType, x: Array) -> Array:
@@ -194,7 +194,7 @@ def conic_projection_jacobian(cone: ConstraintType, x: Array) -> Array:
     elif cone == ConstraintType.SECOND_ORDER_CONE:
         return _second_order_cone_jacobian(x)
     else:
-        raise AltroException(f"Unknown cone type: {cone}", ErrorCode.INVALID_CONSTRAINT_DIM)
+        raise AltroError(f"Unknown cone type: {cone}", ErrorCode.INVALID_CONSTRAINT_DIM)
 
 
 def conic_projection_hessian(cone: ConstraintType, x: Array, b: Array) -> Array:
@@ -204,4 +204,4 @@ def conic_projection_hessian(cone: ConstraintType, x: Array, b: Array) -> Array:
     elif cone == ConstraintType.SECOND_ORDER_CONE:
         return _second_order_cone_hessian(x, b)
     else:
-        raise AltroException(f"Unknown cone type: {cone}", ErrorCode.INVALID_CONSTRAINT_DIM)
+        raise AltroError(f"Unknown cone type: {cone}", ErrorCode.INVALID_CONSTRAINT_DIM)

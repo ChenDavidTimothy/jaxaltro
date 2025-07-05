@@ -6,10 +6,12 @@ error handling system, maintaining identical error categorization and messaging.
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 from .types import ErrorCode
 
 
-class AltroException(Exception):
+class AltroError(Exception):
     """Base exception class for ALTRO trajectory optimization errors.
 
     Corresponds to C++ AltroErrorException base class.
@@ -24,14 +26,14 @@ class AltroException(Exception):
         return f"ALTRO Error {self.error_code.value}: {self.message}"
 
 
-class DimensionError(AltroException):
+class DimensionError(AltroError):
     """Exception for dimension-related errors."""
 
     def __init__(self, message: str, error_code: ErrorCode = ErrorCode.DIMENSION_MISMATCH) -> None:
         super().__init__(message, error_code)
 
 
-class InitializationError(AltroException):
+class InitializationError(AltroError):
     """Exception for solver initialization errors."""
 
     def __init__(
@@ -40,14 +42,14 @@ class InitializationError(AltroException):
         super().__init__(message, error_code)
 
 
-class OptimizationError(AltroException):
+class OptimizationError(AltroError):
     """Exception for optimization algorithm errors."""
 
     def __init__(self, message: str, error_code: ErrorCode) -> None:
         super().__init__(message, error_code)
 
 
-class ConstraintError(AltroException):
+class ConstraintError(AltroError):
     """Exception for constraint-related errors."""
 
     def __init__(
@@ -94,6 +96,6 @@ def _print_error_code(error_code: ErrorCode) -> None:
     print(f"Got error code {error_code.value}: {_error_code_to_string(error_code)}")
 
 
-def _altro_throw(message: str, error_code: ErrorCode) -> None:
+def _altro_throw(message: str, error_code: ErrorCode) -> NoReturn:
     """Throw ALTRO exception matching C++ ALTRO_THROW macro behavior."""
-    raise AltroException(message, error_code)
+    raise AltroError(message, error_code)

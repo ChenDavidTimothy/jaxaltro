@@ -42,7 +42,6 @@ def create_double_integrator_dynamics(dim: int = 2) -> tuple[callable, callable]
     @jax.jit
     def dynamics_function(x: Array, u: Array, h: Float) -> Array:
         """Double integrator dynamics: x_{k+1} = f(x_k, u_k, h)."""
-        2 * dim  # State dimension
 
         # Extract position and velocity
         pos = x[:dim]
@@ -109,7 +108,7 @@ def create_goal_constraint(x_goal: Array) -> tuple[callable, callable]:
     return constraint_function, constraint_jacobian
 
 
-def solve_double_integrator_example() -> None:
+def solve_double_integrator_example():
     """Solve the double integrator trajectory optimization problem."""
 
     # Problem parameters

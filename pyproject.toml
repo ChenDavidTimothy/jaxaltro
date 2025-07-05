@@ -92,7 +92,8 @@ ignore = [
     "S101", # Use assert statements (allow in tests)
     "RUF003",
     "S603",
-    "E741"
+    "E741",
+    "S105"
 ]
 
 # Per-file ignores

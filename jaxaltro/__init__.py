@@ -32,7 +32,7 @@ from .cubic_spline import (
 
 # Exception hierarchy
 from .exceptions import (
-    AltroException,
+    AltroError,
     ConstraintError,
     DimensionError,
     InitializationError,
@@ -92,7 +92,7 @@ __all__ = [
     # Main solver interface
     "ALTROSolver",
     # Exceptions
-    "AltroException",
+    "AltroError",
     # Configuration
     "AltroOptions",
     "AltroStats",

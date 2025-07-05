@@ -31,7 +31,7 @@ def _require_initialized_array(arr: Array | None, context: str) -> Array:
         Validated non-None array
 
     Raises:
-        AltroException: If array is None with detailed context
+        AltroError: If array is None with detailed context
     """
     if arr is None:
         _altro_throw(f"Array not initialized: {context}", ErrorCode.SOLVER_NOT_INITIALIZED)
