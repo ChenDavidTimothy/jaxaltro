@@ -145,6 +145,30 @@ class KnotPointData:
     projected_duals: list[Array] = field(default_factory=list)
     penalty_parameters: list[Float] = field(default_factory=list)
 
+    def _assert_initialized(self) -> None:
+        """Assert knot point is initialized for computational operations."""
+        if not self.is_initialized:
+            _altro_throw(
+                f"Knot point {self.knot_point_index} not initialized",
+                ErrorCode.SOLVER_NOT_INITIALIZED,
+            )
+
+    def _assert_arrays_non_none(self) -> None:
+        """Assert computational arrays are non-None after initialization."""
+        self._assert_initialized()
+
+        # These assertions inform the type checker that arrays are non-None
+        assert self.x_ is not None
+        assert self.u_ is not None
+        assert self.y_ is not None
+        assert self.lx_ is not None
+        assert self.lxx_ is not None
+
+        if not self.is_terminal:
+            assert self.lu_ is not None
+            assert self.luu_ is not None
+            assert self.lux_ is not None
+
     def set_dimension(self, num_states: int, num_inputs: int) -> None:
         """Set state and control dimensions matching C++ SetDimension."""
         if num_states <= 0:
@@ -499,9 +523,7 @@ class KnotPointData:
                 ErrorCode.INVALID_OPT_AT_TERMINAL_KNOT_POINT,
             )
 
-        if not self.is_initialized:
-            _altro_throw("Knot point not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
-
+        self._assert_initialized()
         assert self.x_ is not None
         assert self.u_ is not None
 
@@ -518,6 +540,8 @@ class KnotPointData:
         """Calculate dynamics expansion matching C++ CalcDynamicsExpansion."""
         if self.is_terminal:
             return
+
+        self._assert_initialized()
 
         if not self.dynamics_are_linear:
             n = self.get_state_dim()
@@ -624,11 +648,14 @@ class KnotPointData:
 
     def _calc_constraint_cost_gradients(self) -> None:
         """Calculate constraint cost gradients matching C++ CalcConstraintCostGradients."""
+        # Assumes the constraints and Jacobians have been evaluated
+        # Assumes the projected duals have already been calculated
         self._calc_conic_jacobians()
 
         n = self.get_state_dim()
         m = self.get_input_dim()
 
+        self._assert_arrays_non_none()
         assert self.lx_ is not None
         if not self.is_terminal:
             assert self.lu_ is not None
@@ -642,15 +669,20 @@ class KnotPointData:
                 constraint_grad_u = (
                     self.constraint_jacs[j][:, n : n + m].T @ self.projected_duals[j]
                 )
+                assert self.lu_ is not None
                 self.lu_ = self.lu_ - constraint_grad_u
 
     def _calc_constraint_cost_hessians(self) -> None:
         """Calculate constraint cost Hessians matching C++ CalcConstraintCostHessians."""
+        # Assumes the constraints and Jacobians have been evaluated
+        # Assumes the projected duals have already been calculated
+        # Assumes the projected Jacobian has already been calculated
         self._calc_conic_hessians()
 
         n = self.get_state_dim()
         m = self.get_input_dim()
 
+        self._assert_arrays_non_none()
         assert self.lxx_ is not None
         if not self.is_terminal:
             assert self.luu_ is not None
@@ -661,6 +693,8 @@ class KnotPointData:
             self.lxx_ = self.lxx_ + self.constraint_hessians[j][:n, :n]
 
             if not self.is_terminal:
+                assert self.luu_ is not None
+                assert self.lux_ is not None
                 self.luu_ = self.luu_ + self.constraint_hessians[j][n : n + m, n : n + m]
                 self.lux_ = self.lux_ + self.constraint_hessians[j][n : n + m, :n]
 
@@ -737,7 +771,9 @@ class KnotPointData:
             cost += self.c
             return float(cost)
 
-        return 0.0  # Should never reach here
+        # This should never be reached due to all enum cases being covered
+        _altro_throw("Invalid cost function type", ErrorCode.COST_FUN_NOT_SET)
+        return 0.0  # Added to satisfy type checker; should never be reached
 
     def _calc_original_cost_gradient(self) -> None:
         """Calculate original cost gradient matching C++ CalcOriginalCostGradient."""

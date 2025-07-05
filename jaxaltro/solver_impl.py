@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 
 import jax.numpy as jnp
+from jax import Array
 
 from .exceptions import ErrorCode, _altro_throw
 from .knot_point_data import KnotPointData
@@ -65,6 +66,119 @@ class SolverImpl:
         # Expected cost reduction
         self.delta_V = jnp.zeros(2)
 
+    def _assert_initialized(self) -> None:
+        """Assert solver is initialized for computational operations."""
+        if not self.is_initialized:
+            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+
+    def _get_non_none_arrays_for_tvlqr_backward(
+        self,
+    ) -> tuple[
+        list[Array],
+        list[Array],
+        list[Array],
+        list[Array],
+        list[Array],
+        list[Array],
+        list[Array],
+        list[Array],
+    ]:
+        """Get non-None arrays for TVLQR backward pass with proper type checking."""
+        self._assert_initialized()
+        N = self.horizon_length
+
+        A_list: list[Array] = []
+        B_list: list[Array] = []
+        f_list: list[Array] = []
+        Q_list: list[Array] = []
+        R_list: list[Array] = []
+        H_list: list[Array] = []
+        q_list: list[Array] = []
+        r_list: list[Array] = []
+
+        # Collect dynamics arrays
+        for k in range(N):
+            if self.data[k].A_ is None or self.data[k].B_ is None or self.data[k].f_ is None:
+                _altro_throw(
+                    f"Dynamics arrays not initialized at knot point {k}",
+                    ErrorCode.SOLVER_NOT_INITIALIZED,
+                )
+            A_list.append(self.data[k].A_)
+            B_list.append(self.data[k].B_)
+            f_list.append(self.data[k].f_)
+
+        # Collect cost arrays
+        for k in range(N + 1):
+            if self.data[k].lxx_ is None or self.data[k].lx_ is None:
+                _altro_throw(
+                    f"Cost arrays not initialized at knot point {k}",
+                    ErrorCode.SOLVER_NOT_INITIALIZED,
+                )
+            Q_list.append(self.data[k].lxx_)
+            q_list.append(self.data[k].lx_)
+
+            if k < N:
+                if (
+                    self.data[k].luu_ is None
+                    or self.data[k].lux_ is None
+                    or self.data[k].lu_ is None
+                ):
+                    _altro_throw(
+                        f"Control cost arrays not initialized at knot point {k}",
+                        ErrorCode.SOLVER_NOT_INITIALIZED,
+                    )
+                R_list.append(self.data[k].luu_)
+                H_list.append(self.data[k].lux_)
+                r_list.append(self.data[k].lu_)
+
+        return A_list, B_list, f_list, Q_list, R_list, H_list, q_list, r_list
+
+    def _get_non_none_arrays_for_tvlqr_forward(
+        self,
+    ) -> tuple[
+        list[Array], list[Array], list[Array], list[Array], list[Array], list[Array], list[Array]
+    ]:
+        """Get non-None arrays for TVLQR forward pass with proper type checking."""
+        self._assert_initialized()
+        N = self.horizon_length
+
+        A_list: list[Array] = []
+        B_list: list[Array] = []
+        f_list: list[Array] = []
+        K_list: list[Array] = []
+        d_list: list[Array] = []
+        P_list: list[Array] = []
+        p_list: list[Array] = []
+
+        for k in range(N):
+            if (
+                self.data[k].A_ is None
+                or self.data[k].B_ is None
+                or self.data[k].f_ is None
+                or self.data[k].K_ is None
+                or self.data[k].d_ is None
+            ):
+                _altro_throw(
+                    f"TVLQR arrays not initialized at knot point {k}",
+                    ErrorCode.SOLVER_NOT_INITIALIZED,
+                )
+            A_list.append(self.data[k].A_)
+            B_list.append(self.data[k].B_)
+            f_list.append(self.data[k].f_)
+            K_list.append(self.data[k].K_)
+            d_list.append(self.data[k].d_)
+
+        for k in range(N + 1):
+            if self.data[k].P_ is None or self.data[k].p_ is None:
+                _altro_throw(
+                    f"Cost-to-go arrays not initialized at knot point {k}",
+                    ErrorCode.SOLVER_NOT_INITIALIZED,
+                )
+            P_list.append(self.data[k].P_)
+            p_list.append(self.data[k].p_)
+
+        return A_list, B_list, f_list, K_list, d_list, P_list, p_list
+
     def initialize(self) -> None:
         """Initialize solver matching C++ Initialize."""
         # Initialize each knot point
@@ -86,8 +200,7 @@ class SolverImpl:
 
     def solve(self) -> None:
         """Main solve loop matching C++ Solve."""
-        if not self.is_initialized:
-            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+        self._assert_initialized()
 
         # Configure line search
         self.line_search.use_backtracking_linesearch = self.opts.use_backtracking_linesearch
@@ -208,48 +321,14 @@ class SolverImpl:
         """Backward pass using TVLQR matching C++ BackwardPass."""
         N = self.horizon_length
 
-        # Prepare data for TVLQR with proper type checking
+        # Get arrays with proper type checking
         nx_list = [self.data[k].get_state_dim() for k in range(N + 1)]
         nu_list = [self.data[k].get_input_dim() for k in range(N)]
 
-        # Filter None values and ensure proper arrays
-        A_list = []
-        B_list = []
-        f_list = []
-        for k in range(N):
-            if self.data[k].A_ is None or self.data[k].B_ is None or self.data[k].f_ is None:
-                _altro_throw(
-                    "Dynamics matrices not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
-            A_list.append(self.data[k].A_)
-            B_list.append(self.data[k].B_)
-            f_list.append(self.data[k].f_)
-
-        Q_list = []
-        R_list = []
-        H_list = []
-        q_list = []
-        r_list = []
-        for k in range(N + 1):
-            if self.data[k].lxx_ is None or self.data[k].lx_ is None:
-                _altro_throw(
-                    "Cost matrices not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
-            Q_list.append(self.data[k].lxx_)
-            q_list.append(self.data[k].lx_)
-
-            if k < N:
-                if (
-                    self.data[k].luu_ is None
-                    or self.data[k].lux_ is None
-                    or self.data[k].lu_ is None
-                ):
-                    _altro_throw(
-                        "Cost matrices not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                    )
-                R_list.append(self.data[k].luu_)
-                H_list.append(self.data[k].lux_)
-                r_list.append(self.data[k].lu_)
+        # Get non-None arrays for TVLQR
+        A_list, B_list, f_list, Q_list, R_list, H_list, q_list, r_list = (
+            self._get_non_none_arrays_for_tvlqr_backward()
+        )
 
         # Perform backward pass
         K_list, d_list, P_list, p_list, delta_V, status = tvlqr_backward_pass(
@@ -341,18 +420,14 @@ class SolverImpl:
             knot_point = self.data[k]
             next_knot_point = self.data[k + 1]
 
-            # Ensure arrays are properly initialized
-            if (
-                knot_point.x_ is None
-                or knot_point.x is None
-                or knot_point.K_ is None
-                or knot_point.d_ is None
-                or knot_point.P_ is None
-                or knot_point.p_ is None
-            ):
-                _altro_throw(
-                    "Knot point arrays not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
+            # Assert arrays are properly initialized
+            knot_point._assert_arrays_non_none()
+            assert knot_point.x_ is not None
+            assert knot_point.x is not None
+            assert knot_point.K_ is not None
+            assert knot_point.d_ is not None
+            assert knot_point.P_ is not None
+            assert knot_point.p_ is not None
 
             # Compute control
             dx = knot_point.x_ - knot_point.x
@@ -371,15 +446,10 @@ class SolverImpl:
             # Calculate gradient wrt alpha
             knot_point.calc_dynamics_expansion()
 
-            if (
-                knot_point.K_ is None
-                or knot_point.dx_da_ is None
-                or knot_point.A_ is None
-                or knot_point.B_ is None
-            ):
-                _altro_throw(
-                    "Gradient arrays not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
+            assert knot_point.K_ is not None
+            assert knot_point.dx_da_ is not None
+            assert knot_point.A_ is not None
+            assert knot_point.B_ is not None
 
             knot_point.du_da_ = -knot_point.K_ @ knot_point.dx_da_ + knot_point.d_
             next_knot_point.dx_da_ = (
@@ -390,10 +460,8 @@ class SolverImpl:
             knot_point.calc_constraint_jacobians()
             knot_point.calc_cost_gradient()
 
-            if knot_point.lx_ is None or knot_point.lu_ is None:
-                _altro_throw(
-                    "Cost gradient not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
+            assert knot_point.lx_ is not None
+            assert knot_point.lu_ is not None
 
             dphi += float(knot_point.lx_.T @ knot_point.dx_da_)
             dphi += float(knot_point.lu_.T @ knot_point.du_da_)
@@ -404,15 +472,10 @@ class SolverImpl:
         cost = knot_point.calc_cost()
         phi += cost
 
-        if (
-            knot_point.x_ is None
-            or knot_point.x is None
-            or knot_point.P_ is None
-            or knot_point.p_ is None
-        ):
-            _altro_throw(
-                "Terminal knot point not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-            )
+        assert knot_point.x_ is not None
+        assert knot_point.x is not None
+        assert knot_point.P_ is not None
+        assert knot_point.p_ is not None
 
         dx = knot_point.x_ - knot_point.x
         knot_point.y_ = knot_point.P_ @ dx + knot_point.p_
@@ -420,10 +483,8 @@ class SolverImpl:
         knot_point.calc_constraint_jacobians()
         knot_point.calc_cost_gradient()
 
-        if knot_point.lx_ is None or knot_point.dx_da_ is None:
-            _altro_throw(
-                "Terminal cost gradient not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-            )
+        assert knot_point.lx_ is not None
+        assert knot_point.dx_da_ is not None
 
         dphi += float(knot_point.lx_.T @ knot_point.dx_da_)
 
@@ -463,17 +524,14 @@ class SolverImpl:
             zn = self.data[k + 1]
 
             # Ensure arrays are initialized
-            if (
-                z.lx_ is None
-                or z.A_ is None
-                or zn.y_ is None
-                or z.y_ is None
-                or z.lu_ is None
-                or z.B_ is None
-            ):
-                _altro_throw(
-                    "Stationarity arrays not initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
+            z._assert_arrays_non_none()
+            zn._assert_arrays_non_none()
+            assert z.lx_ is not None
+            assert z.A_ is not None
+            assert zn.y_ is not None
+            assert z.y_ is not None
+            assert z.lu_ is not None
+            assert z.B_ is not None
 
             # Convert JAX arrays to scalars for max comparison
             stationarity_x = float(jnp.max(jnp.abs(z.lx_ + z.A_.T @ zn.y_ - z.y_)))
@@ -484,10 +542,9 @@ class SolverImpl:
 
         # Terminal stationarity
         z = self.data[N]
-        if z.lx_ is None or z.y_ is None:
-            _altro_throw(
-                "Terminal stationarity arrays not initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-            )
+        z._assert_arrays_non_none()
+        assert z.lx_ is not None
+        assert z.y_ is not None
 
         res_x = max(res_x, float(jnp.max(jnp.abs(z.lx_ - z.y_))))
 
@@ -503,8 +560,7 @@ class SolverImpl:
 
     def open_loop_rollout(self) -> None:
         """Open loop rollout matching C++ OpenLoopRollout."""
-        if not self.is_initialized:
-            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+        self._assert_initialized()
 
         self.data[0].x_ = self.initial_state
 
@@ -518,43 +574,14 @@ class SolverImpl:
         """Linear rollout using TVLQR matching C++ LinearRollout."""
         N = self.horizon_length
 
-        # Prepare data for TVLQR forward pass with proper type checking
+        # Get arrays with proper type checking
         nx_list = [self.data[k].get_state_dim() for k in range(N + 1)]
         nu_list = [self.data[k].get_input_dim() for k in range(N)]
 
-        # Filter None values and ensure proper arrays
-        A_list = []
-        B_list = []
-        f_list = []
-        K_list = []
-        d_list = []
-        P_list = []
-        p_list = []
-
-        for k in range(N):
-            if (
-                self.data[k].A_ is None
-                or self.data[k].B_ is None
-                or self.data[k].f_ is None
-                or self.data[k].K_ is None
-                or self.data[k].d_ is None
-            ):
-                _altro_throw(
-                    "TVLQR arrays not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
-            A_list.append(self.data[k].A_)
-            B_list.append(self.data[k].B_)
-            f_list.append(self.data[k].f_)
-            K_list.append(self.data[k].K_)
-            d_list.append(self.data[k].d_)
-
-        for k in range(N + 1):
-            if self.data[k].P_ is None or self.data[k].p_ is None:
-                _altro_throw(
-                    "TVLQR P/p arrays not properly initialized", ErrorCode.SOLVER_NOT_INITIALIZED
-                )
-            P_list.append(self.data[k].P_)
-            p_list.append(self.data[k].p_)
+        # Get non-None arrays for TVLQR forward pass
+        A_list, B_list, f_list, K_list, d_list, P_list, p_list = (
+            self._get_non_none_arrays_for_tvlqr_forward()
+        )
 
         # Perform forward pass
         x_list, u_list, y_list = tvlqr_forward_pass(
@@ -590,8 +617,7 @@ class SolverImpl:
 
     def dual_update(self) -> None:
         """Update dual variables matching C++ DualUpdate."""
-        if not self.is_initialized:
-            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+        self._assert_initialized()
 
         for k in range(self.horizon_length + 1):
             self.data[k].dual_update()
@@ -600,8 +626,7 @@ class SolverImpl:
 
     def penalty_update(self) -> None:
         """Update penalty parameters matching C++ PenaltyUpdate."""
-        if not self.is_initialized:
-            _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+        self._assert_initialized()
 
         for k in range(self.horizon_length + 1):
             self.data[k].penalty_update(self.opts.penalty_scaling, self.opts.penalty_max)
