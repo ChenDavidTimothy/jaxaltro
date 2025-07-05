@@ -47,28 +47,26 @@ def _second_order_cone_projection(x: Array) -> Array:
     v_norm = jnp.linalg.norm(v)
 
     # Three cases matching C++ implementation
-    def below_cone():
-        # v_norm <= -s: below the cone
+    # Use explicit JAX conditionals to ensure proper Array typing
+    def case_below_cone() -> Array:
+        # a <= -s: below the cone
         return jnp.zeros_like(x)
 
-    def in_cone():
-        # v_norm <= s: in the cone
+    def case_in_cone() -> Array:
+        # a <= s: in the cone
         return x
 
-    def outside_cone():
-        # v_norm > s: outside the cone
-        # Safe division: avoid division by zero during JAX tracing
-        safe_v_norm = jnp.where(v_norm == 0.0, 1.0, v_norm)
-        c = 0.5 * (1 + s / safe_v_norm)
-
-        # When v_norm = 0, mathematically we shouldn't reach this branch
-        v_proj = jnp.where(v_norm == 0.0, jnp.zeros_like(v), c * v)
-        s_proj = jnp.where(v_norm == 0.0, 0.0, c * v_norm)
-
+    def case_outside_cone() -> Array:
+        # a > s: outside the cone
+        c = 0.5 * (1 + s / v_norm)
+        v_proj = c * v
+        s_proj = c * v_norm
         return jnp.concatenate([v_proj, jnp.array([s_proj])])
 
-    # Use JAX conditional logic
-    return jnp.where(v_norm <= -s, below_cone(), jnp.where(v_norm <= s, in_cone(), outside_cone()))
+    # Use JAX conditional logic with proper Array return types
+    return jnp.where(
+        v_norm <= -s, case_below_cone(), jnp.where(v_norm <= s, case_in_cone(), case_outside_cone())
+    )
 
 
 def _second_order_cone_jacobian(x: Array) -> Array:
@@ -78,36 +76,24 @@ def _second_order_cone_jacobian(x: Array) -> Array:
     s = x[n]
     v_norm = jnp.linalg.norm(v)
 
-    def below_cone_jac():
+    def case_below_cone() -> Array:
         return jnp.zeros((x.shape[0], x.shape[0]))
 
-    def in_cone_jac():
+    def case_in_cone() -> Array:
         return jnp.eye(x.shape[0])
 
-    def outside_cone_jac():
-        # Safe division: avoid division by zero during JAX tracing
-        safe_v_norm = jnp.where(v_norm == 0.0, 1.0, v_norm)
-        safe_v_norm_sq = safe_v_norm**2
-        safe_v_norm_cubed = safe_v_norm**3
+    def case_outside_cone() -> Array:
+        c = 0.5 * (1 + s / v_norm)
 
-        c = 0.5 * (1 + s / safe_v_norm)
-
-        # dvdv block - handle v_norm = 0 case
-        dvdv = jnp.outer(v, v) * (-0.5 * s / safe_v_norm_cubed)
+        # dvdv block
+        dvdv = jnp.outer(v, v) * (-0.5 * s / (v_norm**3))
         dvdv = dvdv + c * jnp.eye(n)
 
-        # When v_norm = 0, dvdv should be c * I where c = 0.5 * (1 + s)
-        # But mathematically this branch shouldn't execute when v_norm = 0
-        dvdv = jnp.where(v_norm == 0.0, 0.5 * (1 + s) * jnp.eye(n), dvdv)
+        # dvds block
+        dvds = 0.5 * v / v_norm
 
-        # dvds block - handle v_norm = 0 case
-        dvds = jnp.where(v_norm == 0.0, jnp.zeros(n), 0.5 * v / safe_v_norm)
-
-        # dsdv block - handle v_norm = 0 case
-        dsdv_term1 = -0.5 * s / safe_v_norm_sq
-        dsdv_term2 = c / safe_v_norm
-        dsdv = (dsdv_term1 + dsdv_term2) * v
-        dsdv = jnp.where(v_norm == 0.0, jnp.zeros(n), dsdv)
+        # dsdv block
+        dsdv = ((-0.5 * s / (v_norm**2)) + c / v_norm) * v
 
         # dsds block
         dsds = jnp.array([0.5])
@@ -118,7 +104,7 @@ def _second_order_cone_jacobian(x: Array) -> Array:
         return jnp.vstack([top_row, bottom_row])
 
     return jnp.where(
-        v_norm <= -s, below_cone_jac(), jnp.where(v_norm <= s, in_cone_jac(), outside_cone_jac())
+        v_norm <= -s, case_below_cone(), jnp.where(v_norm <= s, case_in_cone(), case_outside_cone())
     )
 
 
@@ -133,62 +119,39 @@ def _second_order_cone_hessian(x: Array, b: Array) -> Array:
     v_norm = jnp.linalg.norm(v)
     vbv = jnp.dot(v, bv)
 
-    def below_cone_hess():
+    def case_below_cone() -> Array:
         return jnp.zeros((x.shape[0], x.shape[0]))
 
-    def in_cone_hess():
+    def case_in_cone() -> Array:
         return jnp.zeros((x.shape[0], x.shape[0]))
 
-    def outside_cone_hess():
-        # Safe division: avoid division by zero during JAX tracing
-        safe_v_norm = jnp.where(v_norm == 0.0, 1.0, v_norm)
-        safe_v_norm_sq = safe_v_norm**2
-        safe_v_norm_cubed = safe_v_norm**3
-        safe_v_norm_fourth = safe_v_norm**4
-
+    def case_outside_cone() -> Array:
         H = jnp.zeros((x.shape[0], x.shape[0]))
-
-        # When v_norm = 0, mathematically this branch shouldn't execute,
-        # but we need to provide safe values for JAX tracing
-        is_zero_norm = v_norm == 0.0
 
         for i in range(n):
             hi = 0.0
             for j in range(n):
-                Hij = jnp.where(
-                    is_zero_norm,
-                    jnp.where(i == j, 1.0, 0.0),  # Identity when v_norm = 0
-                    -v[i] * v[j] / safe_v_norm_sq + (1.0 if i == j else 0.0),
-                )
+                Hij = -v[i] * v[j] / (v_norm**2)
+                if i == j:
+                    Hij += 1.0
                 hi += Hij * bv[j]
 
-            # H[i, n] and H[n, i] - handle v_norm = 0 case
-            hi_safe = jnp.where(is_zero_norm, 0.0, hi / (2 * safe_v_norm))
-            H = H.at[i, n].set(hi_safe)
-            H = H.at[n, i].set(hi_safe)
+            # H[i, n] and H[n, i]
+            H = H.at[i, n].set(hi / (2 * v_norm))
+            H = H.at[n, i].set(hi / (2 * v_norm))
 
             for j in range(i + 1):
                 vij = v[i] * v[j]
-
-                # H1 term - handle v_norm = 0
-                H1 = jnp.where(is_zero_norm, 0.0, hi * v[j] * (-s / safe_v_norm_cubed))
-
-                # H2 term - handle v_norm = 0
-                H2_term1 = jnp.where(is_zero_norm, 0.0, vij * (2 * vbv) / safe_v_norm_fourth)
-                H2_term2 = jnp.where(is_zero_norm, 0.0, -v[i] * bv[j] / safe_v_norm_sq)
-                H2 = H2_term1 + H2_term2
+                H1 = hi * v[j] * (-s / (v_norm**3))
+                H2 = vij * (2 * vbv) / (v_norm**4) - v[i] * bv[j] / (v_norm**2)
+                H3 = -vij / (v_norm**2)
 
                 if i == j:
-                    H2 = H2 - jnp.where(is_zero_norm, 0.0, vbv / safe_v_norm_sq)
+                    H2 -= vbv / (v_norm**2)
+                    H3 += 1.0
 
-                H2 = H2 * jnp.where(is_zero_norm, 0.0, s / safe_v_norm)
-
-                # H3 term - handle v_norm = 0
-                H3 = jnp.where(
-                    is_zero_norm,
-                    bs if i == j else 0.0,  # bs * delta_ij when v_norm = 0
-                    -vij / safe_v_norm_sq + (1.0 if i == j else 0.0),
-                ) * jnp.where(is_zero_norm, 1.0, bs / safe_v_norm)
+                H2 *= s / v_norm
+                H3 *= bs / v_norm
 
                 Hij_val = (H1 + H2 + H3) / 2.0
                 H = H.at[i, j].set(Hij_val)
@@ -199,7 +162,7 @@ def _second_order_cone_hessian(x: Array, b: Array) -> Array:
         return H
 
     return jnp.where(
-        v_norm <= -s, below_cone_hess(), jnp.where(v_norm <= s, in_cone_hess(), outside_cone_hess())
+        v_norm <= -s, case_below_cone(), jnp.where(v_norm <= s, case_in_cone(), case_outside_cone())
     )
 
 

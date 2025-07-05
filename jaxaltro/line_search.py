@@ -20,8 +20,8 @@ from .cubic_spline import (
 from .types import Float
 
 
-# Type alias for merit function
-MeritFunction = Callable[[Float], tuple[Float, Float | None]]
+# Type alias for merit function - always returns both phi and dphi
+MeritFunction = Callable[[Float], tuple[Float, Float]]
 
 
 class LineSearchReturnCode(Enum):
@@ -123,14 +123,14 @@ class CubicLineSearch:
         for iter_count in range(self.max_iters):
             self.n_iters += 1
 
-            # Evaluate merit function
+            # Evaluate merit function - always returns both values
             phi, dphi = merit_fun(alpha)
             self.phi = phi
             self.dphi = dphi
 
             sufficient_decrease_satisfied = phi <= phi0 + self.c1 * alpha * dphi0
             function_not_decreasing = phi >= phi_prev
-            strong_wolfe_satisfied = jnp.abs(dphi) <= -self.c2 * dphi0
+            strong_wolfe_satisfied = bool(jnp.abs(dphi) <= -self.c2 * dphi0)
 
             if self.verbose:
                 print(f"  iter = {iter_count}: alpha = {alpha}, phi = {phi}, dphi = {dphi}")
@@ -155,7 +155,7 @@ class CubicLineSearch:
                     self.n_iters += 1
 
                     sufficient_decrease_cubic = phi_cubic <= phi0 + self.c1 * alpha_cubic * dphi0
-                    strong_wolfe_cubic = jnp.abs(dphi_cubic) <= -self.c2 * dphi0
+                    strong_wolfe_cubic = bool(jnp.abs(dphi_cubic) <= -self.c2 * dphi0)
 
                     if sufficient_decrease_cubic and strong_wolfe_cubic:
                         if self.verbose:
@@ -252,7 +252,7 @@ class CubicLineSearch:
                 self.dphi = dphi
 
                 self.sufficient_decrease = phi <= self.phi0 + self.c1 * alpha * self.dphi0
-                self.curvature = jnp.abs(dphi) <= -self.c2 * self.dphi0
+                self.curvature = bool(jnp.abs(dphi) <= -self.c2 * self.dphi0)
 
                 if self.sufficient_decrease and self.curvature:
                     self.return_code = LineSearchReturnCode.MINIMUM_FOUND
@@ -292,7 +292,7 @@ class CubicLineSearch:
 
             sufficient_decrease = phi <= self.phi0 + self.c1 * alpha * self.dphi0
             higher_than_lo = phi > self.phi_lo
-            curvature = jnp.abs(dphi) <= -self.c2 * self.dphi0
+            curvature = bool(jnp.abs(dphi) <= -self.c2 * self.dphi0)
 
             if self.verbose:
                 print(f"  zoom iter = {zoom_iter}: alpha = {alpha}, phi = {phi}, dphi = {dphi}")

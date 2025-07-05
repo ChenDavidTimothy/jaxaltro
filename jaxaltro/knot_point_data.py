@@ -442,6 +442,7 @@ class KnotPointData:
 
         # Set linear cost gradients for LQ problems
         if self.is_terminal and self.cost_function_type != CostFunctionType.GENERIC:
+            assert self.q is not None
             self.lx_ = self.q
 
         if (
@@ -449,6 +450,9 @@ class KnotPointData:
             and self.cost_function_type != CostFunctionType.GENERIC
             and self.dynamics_are_linear
         ):
+            assert self.q is not None
+            assert self.r is not None
+            assert self.affine_term is not None
             self.lx_ = self.q
             self.lu_ = self.r
             self.f_ = self.affine_term
@@ -495,9 +499,19 @@ class KnotPointData:
                 ErrorCode.INVALID_OPT_AT_TERMINAL_KNOT_POINT,
             )
 
+        if not self.is_initialized:
+            _altro_throw("Knot point not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
+
+        assert self.x_ is not None
+        assert self.u_ is not None
+
         if self.dynamics_are_linear:
+            assert self.A_ is not None
+            assert self.B_ is not None
+            assert self.affine_term is not None
             return self.A_ @ self.x_ + self.B_ @ self.u_ + self.affine_term
         else:
+            assert self.dynamics_function is not None
             return self.dynamics_function(self.x_, self.u_, self.timestep)
 
     def calc_dynamics_expansion(self) -> None:
@@ -510,12 +524,17 @@ class KnotPointData:
             m = self.get_input_dim()
             h = self.get_time_step()
 
+            assert self.dynamics_jacobian is not None
+            assert self.x_ is not None
+            assert self.u_ is not None
+
             # Compute Jacobian
             jac = self.dynamics_jacobian(self.x_, self.u_, h)
             self.A_ = jac[:, :n]
             self.B_ = jac[:, n : n + m]
         else:
             # For linear dynamics, f_ is set to zero for linearization
+            assert self.f_ is not None
             self.f_ = jnp.zeros_like(self.f_)
 
     def calc_cost(self) -> Float:
@@ -547,11 +566,15 @@ class KnotPointData:
 
     def calc_constraints(self) -> None:
         """Calculate constraints matching C++ CalcConstraints."""
+        assert self.x_ is not None
+        assert self.u_ is not None
         for j, constraint_func in enumerate(self.constraint_functions):
             self.constraint_vals[j] = constraint_func(self.x_, self.u_)
 
     def calc_constraint_jacobians(self) -> None:
         """Calculate constraint Jacobians matching C++ CalcConstraintJacobians."""
+        assert self.x_ is not None
+        assert self.u_ is not None
         for j, constraint_jac in enumerate(self.constraint_jacobians):
             self.constraint_jacs[j] = constraint_jac(self.x_, self.u_)
 
@@ -563,7 +586,8 @@ class KnotPointData:
             # Project constraint value onto cone
             projected = conic_projection(cone, self.constraint_vals[j])
             violation = projected - self.constraint_vals[j]
-            viol = max(viol, jnp.max(jnp.abs(violation)))
+            viol_j = float(jnp.max(jnp.abs(violation)))
+            viol = max(viol, viol_j)
         return viol
 
     def dual_update(self) -> None:
@@ -594,7 +618,7 @@ class KnotPointData:
 
         cost = 0.0
         for j in range(len(self.constraint_functions)):
-            cost += jnp.sum(self.projected_duals[j] ** 2) / (2 * self.penalty_parameters[j])
+            cost += float(jnp.sum(self.projected_duals[j] ** 2) / (2 * self.penalty_parameters[j]))
 
         return cost
 
@@ -604,6 +628,10 @@ class KnotPointData:
 
         n = self.get_state_dim()
         m = self.get_input_dim()
+
+        assert self.lx_ is not None
+        if not self.is_terminal:
+            assert self.lu_ is not None
 
         for j in range(len(self.constraint_functions)):
             # Gradient contribution: -C^T * proj_jvp
@@ -622,6 +650,11 @@ class KnotPointData:
 
         n = self.get_state_dim()
         m = self.get_input_dim()
+
+        assert self.lxx_ is not None
+        if not self.is_terminal:
+            assert self.luu_ is not None
+            assert self.lux_ is not None
 
         for j in range(len(self.constraint_functions)):
             # Add constraint Hessian contribution
@@ -669,47 +702,75 @@ class KnotPointData:
         n = self.get_state_dim()
         m = self.get_input_dim()
 
+        assert self.x_ is not None
+        assert self.u_ is not None
+
         if self.cost_function_type == CostFunctionType.GENERIC:
-            return self.cost_function(self.x_, self.u_)
+            assert self.cost_function is not None
+            return float(self.cost_function(self.x_, self.u_))
         elif self.cost_function_type == CostFunctionType.QUADRATIC:
+            assert self.Q is not None
+            assert self.q is not None
             Q_mat = self.Q.reshape(n, n)
             cost = 0.5 * self.x_.T @ Q_mat @ self.x_ + self.q.T @ self.x_
 
             if not self.is_terminal:
+                assert self.R is not None
+                assert self.r is not None
+                assert self.H is not None
                 R_mat = self.R.reshape(m, m)
                 cost += 0.5 * self.u_.T @ R_mat @ self.u_ + self.r.T @ self.u_
                 cost += self.u_.T @ self.H @ self.x_
 
             cost += self.c
-            return cost
+            return float(cost)
         elif self.cost_function_type == CostFunctionType.DIAGONAL:
+            assert self.Q is not None
+            assert self.q is not None
             cost = 0.5 * self.x_.T @ jnp.diag(self.Q[:n]) @ self.x_ + self.q.T @ self.x_
 
             if not self.is_terminal:
+                assert self.R is not None
+                assert self.r is not None
                 cost += 0.5 * self.u_.T @ jnp.diag(self.R[:m]) @ self.u_ + self.r.T @ self.u_
 
             cost += self.c
-            return cost
+            return float(cost)
+
+        return 0.0  # Should never reach here
 
     def _calc_original_cost_gradient(self) -> None:
         """Calculate original cost gradient matching C++ CalcOriginalCostGradient."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 
+        assert self.x_ is not None
+        assert self.u_ is not None
+
         if self.cost_function_type == CostFunctionType.GENERIC:
+            assert self.cost_gradient is not None
             self.lx_, self.lu_ = self.cost_gradient(self.x_, self.u_)
         elif self.cost_function_type == CostFunctionType.QUADRATIC:
+            assert self.Q is not None
+            assert self.q is not None
             Q_mat = self.Q.reshape(n, n)
             self.lx_ = Q_mat @ self.x_ + self.q
 
             if not self.is_terminal:
+                assert self.R is not None
+                assert self.r is not None
+                assert self.H is not None
                 R_mat = self.R.reshape(m, m)
                 self.lu_ = R_mat @ self.u_ + self.r + self.H @ self.x_
                 self.lx_ = self.lx_ + self.H.T @ self.u_
         elif self.cost_function_type == CostFunctionType.DIAGONAL:
+            assert self.Q is not None
+            assert self.q is not None
             self.lx_ = self.Q[:n] * self.x_ + self.q
 
             if not self.is_terminal:
+                assert self.R is not None
+                assert self.r is not None
                 self.lu_ = self.R[:m] * self.u_ + self.r
 
     def _calc_original_cost_hessian(self) -> None:
@@ -718,14 +779,22 @@ class KnotPointData:
         m = self.get_input_dim()
 
         if self.cost_function_type == CostFunctionType.GENERIC:
+            assert self.cost_hessian is not None
+            assert self.x_ is not None
+            assert self.u_ is not None
             self.lxx_, self.luu_, self.lux_ = self.cost_hessian(self.x_, self.u_)
         elif self.cost_function_type == CostFunctionType.QUADRATIC:
+            assert self.Q is not None
             self.lxx_ = self.Q.reshape(n, n)
             if not self.is_terminal:
+                assert self.R is not None
+                assert self.H is not None
                 self.luu_ = self.R.reshape(m, m)
                 self.lux_ = self.H
         elif self.cost_function_type == CostFunctionType.DIAGONAL:
+            assert self.Q is not None
             self.lxx_ = jnp.diag(self.Q[:n])
             if not self.is_terminal:
+                assert self.R is not None
                 self.luu_ = jnp.diag(self.R[:m])
                 self.lux_ = jnp.zeros((m, n))

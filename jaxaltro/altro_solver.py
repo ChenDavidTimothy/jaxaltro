@@ -185,7 +185,7 @@ class ALTROSolver:
             if k != self.get_horizon_length() and m != num_inputs:
                 _altro_throw("Input dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
 
-            self.solver.data[k].set_diagonal_cost(n, m, Q_diag, R_diag, q, r, c)
+            self.solver.data[k].set_diagonal_cost(n, m, Q_diag, R_diag, q, r, float(c))
 
     def set_quadratic_cost(
         self,
@@ -273,7 +273,7 @@ class ALTROSolver:
             if k != N:
                 c += 0.5 * jnp.dot(u_ref, R_diag * u_ref)
 
-            self.solver.data[k].set_diagonal_cost(n, m, Q_diag, R_diag, q, r, c)
+            self.solver.data[k].set_diagonal_cost(n, m, Q_diag, R_diag, q, r, float(c))
 
     def set_constraint(
         self,
@@ -462,7 +462,12 @@ class ALTROSolver:
         self._check_knot_point_indices(k, k_stop, True)
         self._assert_dimensions_are_set(k, k_stop)
 
-        return self.solver.data[k].x_
+        state = self.solver.data[k].x_
+        if state is None:
+            _altro_throw(
+                f"State not initialized at knot point {k}", ErrorCode.SOLVER_NOT_INITIALIZED
+            )
+        return state
 
     def get_input(self, k: int) -> Array:
         """Get input at knot point matching C++ GetInput.
@@ -477,7 +482,12 @@ class ALTROSolver:
         self._check_knot_point_indices(k, k_stop, False)
         self._assert_dimensions_are_set(k, k_stop)
 
-        return self.solver.data[k].u_
+        input_val = self.solver.data[k].u_
+        if input_val is None:
+            _altro_throw(
+                f"Input not initialized at knot point {k}", ErrorCode.SOLVER_NOT_INITIALIZED
+            )
+        return input_val
 
     def get_dual_dynamics(self, k: int) -> Array:
         """Get dynamics dual at knot point matching C++ GetDualDynamics.
@@ -492,7 +502,12 @@ class ALTROSolver:
         self._check_knot_point_indices(k, k_stop, True)
         self._assert_dimensions_are_set(k, k_stop)
 
-        return self.solver.data[k].y_
+        dual = self.solver.data[k].y_
+        if dual is None:
+            _altro_throw(
+                f"Dual not initialized at knot point {k}", ErrorCode.SOLVER_NOT_INITIALIZED
+            )
+        return dual
 
     def update_linear_costs(
         self,

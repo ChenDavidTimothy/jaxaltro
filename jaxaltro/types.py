@@ -17,7 +17,7 @@ from jax import Array
 StateVector: TypeAlias = Array  # JAX array for state vectors
 ControlInput: TypeAlias = Array  # JAX array for control inputs
 DualVariable: TypeAlias = Array  # JAX array for dual variables
-CostGradient: TypeAlias = Array  # JAX array for cost gradients
+GradientArray: TypeAlias = Array  # JAX array for gradients
 JacobianMatrix: TypeAlias = Array  # JAX array for Jacobian matrices
 HessianMatrix: TypeAlias = Array  # JAX array for Hessian matrices
 
@@ -37,7 +37,7 @@ ImplicitDynamicsJacobian: TypeAlias = Callable[
 ]
 
 CostFunction: TypeAlias = Callable[[StateVector, ControlInput], Float]
-CostGradient: TypeAlias = Callable[[StateVector, ControlInput], tuple[CostGradient, CostGradient]]
+CostGradient: TypeAlias = Callable[[StateVector, ControlInput], tuple[GradientArray, GradientArray]]
 CostHessian: TypeAlias = Callable[
     [StateVector, ControlInput], tuple[HessianMatrix, HessianMatrix, HessianMatrix]
 ]
