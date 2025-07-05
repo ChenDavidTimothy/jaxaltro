@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from jaxaltro import ALTROSolver, ConstraintType, Verbosity
+from jaxaltro import AltroOptions, ALTROSolver, ConstraintType, Verbosity
 from jaxaltro.types import Float
 
 
@@ -187,10 +187,12 @@ def solve_double_integrator_example() -> None:
 
     # Set solver options
     opts = solver.get_options()
-    opts.verbose = Verbosity.OUTER
-    opts.iterations_max = 100
-    opts.tol_stationarity = 1e-6
-    opts.tol_primal_feasibility = 1e-6
+    opts = AltroOptions(
+        verbose=Verbosity.OUTER,
+        iterations_max=100,
+        tol_stationarity=1e-6,
+        tol_primal_feasibility=1e-6,
+    )
     solver.set_options(opts)
 
     # Solve

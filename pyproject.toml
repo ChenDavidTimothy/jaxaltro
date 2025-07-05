@@ -21,7 +21,8 @@ classifiers = [
 ]
 keywords = ["control", "engineering", "optimization", "robotics", "aerospace", "autonomous", "trajectory", "planning", "numerical", "simulation"]
 dependencies = [
-    "jax",
+    "jax>=0.4.0",
+    "jaxlib>=0.4.0",
 ]
 
 [project.optional-dependencies]
