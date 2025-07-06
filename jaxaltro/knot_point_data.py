@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -38,7 +39,7 @@ from .types import (
 MAX_CONSTRAINTS = 2**31 - 1
 
 # Global compiled functions cache to avoid recompilation
-_compiled_functions_cache = {}
+_compiled_functions_cache: dict[str, Any] = {}
 
 
 @jax.jit
@@ -71,8 +72,9 @@ def _get_or_create_dynamics_jacobian(
 ) -> _ExplicitDynamicsJacobian:
     """Get or create cached dynamics Jacobian function."""
     func_id = id(dynamics_function)
+    cache_key = f"dynamics_jac_{func_id}"
 
-    if func_id not in _compiled_functions_cache:
+    if cache_key not in _compiled_functions_cache:
 
         @jax.jit
         def auto_dynamics_jacobian(x: Array, u: Array, h: Float) -> Array:
@@ -86,11 +88,11 @@ def _get_or_create_dynamics_jacobian(
             # Automatic Jacobian computation
             jac_combined = jax.jacobian(dynamics_combined)
             xu_combined = jnp.concatenate([x, u])
-            return jac_combined(xu_combined)
+            return cast(Array, jac_combined(xu_combined))
 
-        _compiled_functions_cache[func_id] = auto_dynamics_jacobian
+        _compiled_functions_cache[cache_key] = auto_dynamics_jacobian
 
-    return _compiled_functions_cache[func_id]
+    return cast(_ExplicitDynamicsJacobian, _compiled_functions_cache[cache_key])
 
 
 def _get_or_create_cost_derivatives(
@@ -127,7 +129,7 @@ def _get_or_create_cost_derivatives(
 
         _compiled_functions_cache[cache_key] = (auto_cost_gradient, auto_cost_hessian)
 
-    return _compiled_functions_cache[cache_key]
+    return cast(tuple[_CostGradient, _CostHessian], _compiled_functions_cache[cache_key])
 
 
 def _get_or_create_constraint_jacobian(
@@ -149,11 +151,11 @@ def _get_or_create_constraint_jacobian(
 
             jac_fn = jax.jacobian(constraint_combined)
             xu_combined = jnp.concatenate([x, u])
-            return jac_fn(xu_combined)
+            return cast(Array, jac_fn(xu_combined))
 
         _compiled_functions_cache[cache_key] = auto_constraint_jacobian
 
-    return _compiled_functions_cache[cache_key]
+    return cast(_ConstraintJacobian, _compiled_functions_cache[cache_key])
 
 
 class CostFunctionType(Enum):
@@ -754,7 +756,6 @@ class KnotPointData:
             self.penalty_parameters[j] = min(self.penalty_parameters[j] * scaling, penalty_max)
 
     def _calc_projected_duals(self) -> None:
-        """Calculate projected duals with JIT-compiled math operations."""
         if not self.constraint_functions:
             return
 
@@ -770,7 +771,6 @@ class KnotPointData:
             self.projected_duals[j] = conic_projection(dual_cone_type, z_est)
 
     def _calc_constraint_costs(self) -> Float:
-        """Calculate Augmented Lagrangian constraint costs with JIT-compiled operations."""
         if not self.constraint_functions:
             return 0.0
 
@@ -785,7 +785,6 @@ class KnotPointData:
         return cost
 
     def _calc_constraint_cost_gradients(self) -> None:
-        """Calculate constraint cost gradients with optimized operations."""
         if not self.constraint_functions:
             return
 
@@ -819,8 +818,6 @@ class KnotPointData:
                 self.lu_ = self.lu_ - grad_u
 
     def _calc_constraint_cost_hessians(self) -> None:
-        """Calculate constraint cost Hessians matching C++ CalcConstraintCostHessians."""
-
         self._calc_conic_hessians()
 
         n = self.get_state_dim()
@@ -843,7 +840,6 @@ class KnotPointData:
                 self.lux_ = self.lux_ + self.constraint_hessians[j][n : n + m, :n]
 
     def _calc_conic_jacobians(self) -> None:
-        """Calculate conic Jacobians matching C++ CalcConicJacobians."""
         for j in range(len(self.constraint_functions)):
             dual_cone_type = dual_cone(self.constraint_types[j])
             z_est = self.dual_variables[j] - self.penalty_parameters[j] * self.constraint_vals[j]
@@ -855,7 +851,6 @@ class KnotPointData:
             self.projected_duals[j] = proj_jac.T @ self.projected_duals[j]
 
     def _calc_conic_hessians(self) -> None:
-        """Calculate conic Hessians matching C++ CalcConicHessians."""
         for j in range(len(self.constraint_functions)):
             dual_cone_type = dual_cone(self.constraint_types[j])
             z_est = self.dual_variables[j] - self.penalty_parameters[j] * self.constraint_vals[j]
@@ -876,7 +871,6 @@ class KnotPointData:
                 )
 
     def _calc_original_cost(self) -> Float:
-        """Calculate original cost matching C++ CalcOriginalCost."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 
@@ -917,10 +911,8 @@ class KnotPointData:
 
         # This should never be reached due to all enum cases being covered
         _altro_throw("Invalid cost function type", ErrorCode.COST_FUN_NOT_SET)
-        return 0.0  # Added to satisfy type checker; should never be reached
 
     def _calc_original_cost_gradient(self) -> None:
-        """Calculate original cost gradient using cached automatic differentiation."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 
@@ -954,7 +946,6 @@ class KnotPointData:
                 self.lu_ = self.R[:m] * self.u_ + self.r
 
     def _calc_original_cost_hessian(self) -> None:
-        """Calculate original cost Hessian using cached automatic differentiation."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 

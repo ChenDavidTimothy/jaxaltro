@@ -26,7 +26,7 @@ def benchmark_solver(
 
     # Warm-up for JIT compilation
     print(f"Warming up ({warmup_runs} runs)...")
-    for i in range(warmup_runs):
+    for _ in range(warmup_runs):
         solver = solver_function()
         _ = solver.solve()  # JIT compilation happens here
 
@@ -92,69 +92,73 @@ def benchmark_double_integrator():
     )
 
 
-def benchmark_scaling():
-    """Benchmark different problem sizes."""
+def _create_solver_factory(segments: int) -> Callable[[], Any]:
+    """Create solver factory with bound segment count to fix closure issue."""
     import jax.numpy as jnp
     from example_double_integrator import create_double_integrator_dynamics
 
     from jaxaltro import ALTROSolver, ConstraintType
 
+    def solver_factory():
+        # Create scaled problem
+        solver = ALTROSolver(segments)
+        solver.set_dimension(4, 2)  # 2D double integrator
+        solver.set_time_step(5.0 / segments)
+
+        # Set dynamics - ONLY the function (fixed API)
+        dynamics_func = create_double_integrator_dynamics(2)
+        solver.set_explicit_dynamics(dynamics_func)
+
+        # Set costs using built-in LQR cost (more efficient than custom functions)
+        Q_diag = jnp.ones(4)
+        R_diag = 1e-2 * jnp.ones(2)
+        Qf_diag = 100.0 * jnp.ones(4)
+        x_goal = jnp.zeros(4)
+
+        solver.set_lqr_cost(4, 2, Q_diag, R_diag, x_goal, jnp.zeros(2), k_start=0, k_stop=segments)
+
+        # Terminal cost
+        solver.set_lqr_cost(
+            4,
+            0,
+            Qf_diag,
+            jnp.array([]),
+            x_goal,
+            jnp.array([]),
+            k_start=segments,
+            k_stop=segments + 1,
+        )
+
+        # Goal constraint
+        def goal_constraint(x, u):
+            return x - x_goal
+
+        solver.set_constraint(
+            goal_constraint,
+            4,
+            ConstraintType.EQUALITY,
+            "Goal",
+            k_start=segments,
+            k_stop=segments + 1,
+        )
+
+        # Initial state and initialize
+        x0 = jnp.array([1.0, 1.0, 0.0, 0.0])
+        solver.set_initial_state(x0, 4)
+        solver.initialize()
+
+        return solver
+
+    return solver_factory
+
+
+def benchmark_scaling():
+    """Benchmark different problem sizes."""
     segments_list = [25, 50, 100, 200]
     results = {}
 
     for num_segments in segments_list:
-
-        def solver_factory():
-            # Create scaled problem
-            solver = ALTROSolver(num_segments)
-            solver.set_dimension(4, 2)  # 2D double integrator
-            solver.set_time_step(5.0 / num_segments)
-
-            # Set dynamics - ONLY the function (fixed API)
-            dynamics_func = create_double_integrator_dynamics(2)
-            solver.set_explicit_dynamics(dynamics_func)
-
-            # Set costs using built-in LQR cost (more efficient than custom functions)
-            Q_diag = jnp.ones(4)
-            R_diag = 1e-2 * jnp.ones(2)
-            Qf_diag = 100.0 * jnp.ones(4)
-            x_goal = jnp.zeros(4)
-
-            solver.set_lqr_cost(
-                4, 2, Q_diag, R_diag, x_goal, jnp.zeros(2), k_start=0, k_stop=num_segments
-            )
-
-            # Terminal cost
-            solver.set_lqr_cost(
-                4,
-                0,
-                Qf_diag,
-                jnp.array([]),
-                x_goal,
-                jnp.array([]),
-                k_start=num_segments,
-                k_stop=num_segments + 1,
-            )
-
-            # Goal constraint
-            def goal_constraint(x, u):
-                return x - x_goal
-
-            solver.set_constraint(
-                goal_constraint,
-                4,
-                ConstraintType.EQUALITY,
-                "Goal",
-                k_start=num_segments,
-                k_stop=num_segments + 1,
-            )
-
-            # Initial state and initialize
-            x0 = jnp.array([1.0, 1.0, 0.0, 0.0])
-            solver.set_initial_state(x0, 4)
-            solver.initialize()
-
-            return solver
+        solver_factory = _create_solver_factory(num_segments)
 
         results[num_segments] = benchmark_solver(
             solver_factory,
