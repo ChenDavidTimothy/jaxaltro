@@ -76,7 +76,7 @@ def _get_or_create_dynamics_jacobian(
 
         @jax.jit
         def auto_dynamics_jacobian(x: Array, u: Array, h: Float) -> Array:
-            n, m = len(x), len(u)
+            n, _m = len(x), len(u)
 
             # Combined input for Jacobian computation
             def dynamics_combined(xu):
@@ -141,7 +141,7 @@ def _get_or_create_constraint_jacobian(
 
         @jax.jit
         def auto_constraint_jacobian(x: Array, u: Array) -> Array:
-            n, m = len(x), len(u)
+            n, _m = len(x), len(u)
 
             def constraint_combined(xu):
                 x_part, u_part = xu[:n], xu[n:]

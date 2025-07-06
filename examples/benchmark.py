@@ -44,7 +44,7 @@ def benchmark_solver(
         # Time total execution
         start_total = time.perf_counter()
         solver = solver_function()
-        status = solver.solve()
+        solver.solve()
         end_total = time.perf_counter()
 
         total_time = end_total - start_total
