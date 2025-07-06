@@ -23,22 +23,22 @@ from .cones import (
 from .exceptions import ErrorCode, _altro_throw
 from .types import (
     ConstraintFunction,
-    ConstraintJacobian,
     ConstraintType,
     CostFunction,
-    CostGradient,
-    CostHessian,
     ExplicitDynamicsFunction,
-    ExplicitDynamicsJacobian,
     Float,
+    _ConstraintJacobian,
+    _CostGradient,
+    _CostHessian,
+    _ExplicitDynamicsJacobian,
 )
 
 
 # Maximum number of constraints matching C++ kMaxConstraints
 MAX_CONSTRAINTS = 2**31 - 1
 
-
-# ADD these JIT-compiled mathematical helpers:
+# Global compiled functions cache to avoid recompilation
+_compiled_functions_cache = {}
 
 
 @jax.jit
@@ -64,6 +64,96 @@ def _violation_computation_jit(projected: Array, constraint_val: Array) -> Array
 def _transpose_matrix_vector_product_jit(matrix: Array, vector: Array) -> Array:
     """JIT-compiled transpose matrix-vector product."""
     return matrix.T @ vector
+
+
+def _get_or_create_dynamics_jacobian(
+    dynamics_function: ExplicitDynamicsFunction,
+) -> _ExplicitDynamicsJacobian:
+    """Get or create cached dynamics Jacobian function."""
+    func_id = id(dynamics_function)
+
+    if func_id not in _compiled_functions_cache:
+
+        @jax.jit
+        def auto_dynamics_jacobian(x: Array, u: Array, h: Float) -> Array:
+            n, m = len(x), len(u)
+
+            # Combined input for Jacobian computation
+            def dynamics_combined(xu):
+                x_part, u_part = xu[:n], xu[n:]
+                return dynamics_function(x_part, u_part, h)
+
+            # Automatic Jacobian computation
+            jac_combined = jax.jacobian(dynamics_combined)
+            xu_combined = jnp.concatenate([x, u])
+            return jac_combined(xu_combined)
+
+        _compiled_functions_cache[func_id] = auto_dynamics_jacobian
+
+    return _compiled_functions_cache[func_id]
+
+
+def _get_or_create_cost_derivatives(
+    cost_function: CostFunction,
+) -> tuple[_CostGradient, _CostHessian]:
+    """Get or create cached cost derivative functions."""
+    func_id = id(cost_function)
+    cache_key = f"cost_derivs_{func_id}"
+
+    if cache_key not in _compiled_functions_cache:
+        # Create automatic gradient function
+        @jax.jit
+        def auto_cost_gradient(x: Array, u: Array) -> tuple[Array, Array]:
+            grad_x = jax.grad(cost_function, argnums=0)(x, u)
+            if len(u) > 0:  # Non-terminal
+                grad_u = jax.grad(cost_function, argnums=1)(x, u)
+            else:  # Terminal
+                grad_u = jnp.array([])
+            return grad_x, grad_u
+
+        # Create automatic Hessian function
+        @jax.jit
+        def auto_cost_hessian(x: Array, u: Array) -> tuple[Array, Array, Array]:
+            hess_xx = jax.hessian(cost_function, argnums=0)(x, u)
+            if len(u) > 0:  # Non-terminal
+                hess_uu = jax.hessian(cost_function, argnums=1)(x, u)
+                # Mixed Hessian: ∂²J/∂u∂x - Jacobian of gradient w.r.t. u taken w.r.t. x
+                grad_u_func = jax.grad(cost_function, argnums=1)
+                hess_ux = jax.jacobian(grad_u_func, argnums=0)(x, u)
+            else:  # Terminal
+                hess_uu = jnp.array([]).reshape(0, 0)
+                hess_ux = jnp.array([]).reshape(0, len(x))
+            return hess_xx, hess_uu, hess_ux
+
+        _compiled_functions_cache[cache_key] = (auto_cost_gradient, auto_cost_hessian)
+
+    return _compiled_functions_cache[cache_key]
+
+
+def _get_or_create_constraint_jacobian(
+    constraint_function: ConstraintFunction,
+) -> _ConstraintJacobian:
+    """Get or create cached constraint Jacobian function."""
+    func_id = id(constraint_function)
+    cache_key = f"constraint_jac_{func_id}"
+
+    if cache_key not in _compiled_functions_cache:
+
+        @jax.jit
+        def auto_constraint_jacobian(x: Array, u: Array) -> Array:
+            n, m = len(x), len(u)
+
+            def constraint_combined(xu):
+                x_part, u_part = xu[:n], xu[n:]
+                return constraint_function(x_part, u_part)
+
+            jac_fn = jax.jacobian(constraint_combined)
+            xu_combined = jnp.concatenate([x, u])
+            return jac_fn(xu_combined)
+
+        _compiled_functions_cache[cache_key] = auto_constraint_jacobian
+
+    return _compiled_functions_cache[cache_key]
 
 
 class CostFunctionType(Enum):
@@ -94,8 +184,8 @@ class KnotPointData:
     # Cost function data
     cost_function_type: CostFunctionType = CostFunctionType.GENERIC
     cost_function: CostFunction | None = None
-    cost_gradient: CostGradient | None = None
-    cost_hessian: CostHessian | None = None
+    cost_gradient: _CostGradient | None = None
+    cost_hessian: _CostHessian | None = None
 
     # Quadratic cost matrices
     Q: Array | None = None  # State cost matrix (vectorized for diagonal)
@@ -108,12 +198,12 @@ class KnotPointData:
     # Dynamics data
     dynamics_are_linear: bool = False
     dynamics_function: ExplicitDynamicsFunction | None = None
-    dynamics_jacobian: ExplicitDynamicsJacobian | None = None
+    dynamics_jacobian: _ExplicitDynamicsJacobian | None = None
     affine_term: Array | None = None
 
     # Constraint data
     constraint_functions: list[ConstraintFunction] = field(default_factory=list)
-    constraint_jacobians: list[ConstraintJacobian] = field(default_factory=list)
+    constraint_jacobians: list[_ConstraintJacobian] = field(default_factory=list)
     constraint_dims: list[int] = field(default_factory=list)
     constraint_types: list[ConstraintType] = field(default_factory=list)
     constraint_labels: list[str] = field(default_factory=list)
@@ -295,13 +385,12 @@ class KnotPointData:
         self.cost_function_type = CostFunctionType.DIAGONAL
         self.cost_function_is_set = True
 
-    def set_cost_function(
-        self, cost_function: CostFunction, cost_gradient: CostGradient, cost_hessian: CostHessian
-    ) -> None:
-        """Set generic cost function matching C++ SetCostFunction."""
+    def set_cost_function(self, cost_function: CostFunction) -> None:
+        """Set generic cost function with cached automatic gradient/Hessian computation."""
         self.cost_function = cost_function
-        self.cost_gradient = cost_gradient
-        self.cost_hessian = cost_hessian
+
+        # Get cached derivative functions (compiled once, reused across knot points)
+        self.cost_gradient, self.cost_hessian = _get_or_create_cost_derivatives(cost_function)
 
         self.cost_function_type = CostFunctionType.GENERIC
         self.cost_function_is_set = True
@@ -337,12 +426,8 @@ class KnotPointData:
         self.dynamics_are_linear = True
         self.dynamics_is_set = True
 
-    def set_dynamics(
-        self,
-        dynamics_function: ExplicitDynamicsFunction,
-        dynamics_jacobian: ExplicitDynamicsJacobian,
-    ) -> None:
-        """Set nonlinear dynamics matching C++ SetDynamics."""
+    def set_dynamics(self, dynamics_function: ExplicitDynamicsFunction) -> None:
+        """Set nonlinear dynamics with cached automatic Jacobian computation."""
         if self.is_terminal:
             _altro_throw(
                 "Cannot set dynamics at terminal knot point",
@@ -350,7 +435,9 @@ class KnotPointData:
             )
 
         self.dynamics_function = dynamics_function
-        self.dynamics_jacobian = dynamics_jacobian
+
+        # Get cached Jacobian function (compiled once, reused across knot points)
+        self.dynamics_jacobian = _get_or_create_dynamics_jacobian(dynamics_function)
 
         self.dynamics_are_linear = False
         self.dynamics_is_set = True
@@ -358,12 +445,11 @@ class KnotPointData:
     def set_constraint(
         self,
         constraint_function: ConstraintFunction,
-        constraint_jacobian: ConstraintJacobian,
         dim: int,
         constraint_type: ConstraintType,
         label: str,
     ) -> None:
-        """Set constraint matching C++ SetConstraint."""
+        """Set constraint with cached automatic Jacobian computation."""
         if len(self.constraint_functions) >= MAX_CONSTRAINTS:
             _altro_throw(
                 f"Maximum number of constraints exceeded at knot point {self.knot_point_index}",
@@ -376,8 +462,11 @@ class KnotPointData:
                 ErrorCode.INVALID_CONSTRAINT_DIM,
             )
 
+        # Get cached constraint Jacobian (compiled once, reused across knot points)
+        auto_constraint_jacobian = _get_or_create_constraint_jacobian(constraint_function)
+
         self.constraint_functions.append(constraint_function)
-        self.constraint_jacobians.append(constraint_jacobian)
+        self.constraint_jacobians.append(auto_constraint_jacobian)
         self.constraint_dims.append(dim)
         self.constraint_types.append(constraint_type)
         self.constraint_labels.append(label)
@@ -573,16 +662,16 @@ class KnotPointData:
         self._assert_initialized()
 
         if not self.dynamics_are_linear:
-            n = self.get_state_dim()
-            m = self.get_input_dim()
             h = self.get_time_step()
 
             assert self.dynamics_jacobian is not None
             assert self.x_ is not None
             assert self.u_ is not None
 
-            # Compute Jacobian
+            # Compute Jacobian using automatic differentiation
             jac = self.dynamics_jacobian(self.x_, self.u_, h)
+            n = self.get_state_dim()
+            m = self.get_input_dim()
             self.A_ = jac[:, :n]
             self.B_ = jac[:, n : n + m]
         else:
@@ -630,14 +719,14 @@ class KnotPointData:
             self.constraint_vals[j] = constraint_func(self.x_, self.u_)
 
     def calc_constraint_jacobians(self) -> None:
-        """Calculate constraint Jacobians - functions already JIT-compiled individually."""
+        """Calculate constraint Jacobians using cached automatic differentiation."""
         if not self.constraint_jacobians:
             return
 
         assert self.x_ is not None
         assert self.u_ is not None
 
-        # Direct evaluation - jacobian functions are already JIT-compiled
+        # Cached Jacobian evaluation
         for j, constraint_jac in enumerate(self.constraint_jacobians):
             self.constraint_jacs[j] = constraint_jac(self.x_, self.u_)
 
@@ -831,7 +920,7 @@ class KnotPointData:
         return 0.0  # Added to satisfy type checker; should never be reached
 
     def _calc_original_cost_gradient(self) -> None:
-        """Calculate original cost gradient matching C++ CalcOriginalCostGradient."""
+        """Calculate original cost gradient using cached automatic differentiation."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 
@@ -865,7 +954,7 @@ class KnotPointData:
                 self.lu_ = self.R[:m] * self.u_ + self.r
 
     def _calc_original_cost_hessian(self) -> None:
-        """Calculate original cost Hessian matching C++ CalcOriginalCostHessian."""
+        """Calculate original cost Hessian using cached automatic differentiation."""
         n = self.get_state_dim()
         m = self.get_input_dim()
 

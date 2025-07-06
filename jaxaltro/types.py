@@ -25,26 +25,29 @@ HessianMatrix: TypeAlias = Array  # JAX array for Hessian matrices
 Float: TypeAlias = float
 Time: TypeAlias = float
 
-# Function type aliases matching C++ function signatures
+# Function type aliases - only functions, derivatives computed automatically
 ExplicitDynamicsFunction: TypeAlias = Callable[[StateVector, ControlInput, Float], StateVector]
-ExplicitDynamicsJacobian: TypeAlias = Callable[[StateVector, ControlInput, Float], JacobianMatrix]
 ImplicitDynamicsFunction: TypeAlias = Callable[
     [StateVector, ControlInput, StateVector, ControlInput, Float], StateVector
 ]
-ImplicitDynamicsJacobian: TypeAlias = Callable[
+
+CostFunction: TypeAlias = Callable[[StateVector, ControlInput], Float]
+ConstraintFunction: TypeAlias = Callable[[StateVector, ControlInput], Array]
+CallbackFunction: TypeAlias = Callable[[], None]
+
+# Internal derivative function types (automatically generated)
+_ExplicitDynamicsJacobian: TypeAlias = Callable[[StateVector, ControlInput, Float], JacobianMatrix]
+_ImplicitDynamicsJacobian: TypeAlias = Callable[
     [StateVector, ControlInput, StateVector, ControlInput, Float],
     tuple[JacobianMatrix, JacobianMatrix],
 ]
-
-CostFunction: TypeAlias = Callable[[StateVector, ControlInput], Float]
-CostGradient: TypeAlias = Callable[[StateVector, ControlInput], tuple[GradientArray, GradientArray]]
-CostHessian: TypeAlias = Callable[
+_CostGradient: TypeAlias = Callable[
+    [StateVector, ControlInput], tuple[GradientArray, GradientArray]
+]
+_CostHessian: TypeAlias = Callable[
     [StateVector, ControlInput], tuple[HessianMatrix, HessianMatrix, HessianMatrix]
 ]
-
-ConstraintFunction: TypeAlias = Callable[[StateVector, ControlInput], Array]
-ConstraintJacobian: TypeAlias = Callable[[StateVector, ControlInput], JacobianMatrix]
-CallbackFunction: TypeAlias = Callable[[], None]
+_ConstraintJacobian: TypeAlias = Callable[[StateVector, ControlInput], JacobianMatrix]
 
 # Constants matching C++ definitions
 LAST_INDEX = -1

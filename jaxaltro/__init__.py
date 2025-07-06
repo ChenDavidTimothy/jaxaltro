@@ -52,22 +52,17 @@ from .types import (
     LAST_INDEX,
     CallbackFunction,
     ConstraintFunction,
-    ConstraintJacobian,
     ConstraintType,
     ControlInput,
     CostFunction,
-    CostGradient,
-    CostHessian,
     DualVariable,
     ErrorCode,
-    # Function types
+    # Function types (only user-facing, no manual derivatives)
     ExplicitDynamicsFunction,
-    ExplicitDynamicsJacobian,
     # Scalar types
     Float,
     HessianMatrix,
     ImplicitDynamicsFunction,
-    ImplicitDynamicsJacobian,
     JacobianMatrix,
     # Enums
     SolveStatus,
@@ -100,13 +95,9 @@ __all__ = [
     "ConstraintError",
     "ConstraintFunction",
     "ConstraintIndex",
-    "ConstraintJacobian",
     "ConstraintType",
     "ControlInput",
     "CostFunction",
-    "CostGradient",
-    "CostGradient",
-    "CostHessian",
     "CubicLineSearch",
     "CubicSpline",
     "CubicSplineReturnCode",
@@ -114,11 +105,9 @@ __all__ = [
     "DualVariable",
     "ErrorCode",
     "ExplicitDynamicsFunction",
-    "ExplicitDynamicsJacobian",
     "Float",
     "HessianMatrix",
     "ImplicitDynamicsFunction",
-    "ImplicitDynamicsJacobian",
     "InitializationError",
     "JacobianMatrix",
     "LineSearchReturnCode",
@@ -164,10 +153,11 @@ Key Features:
 - JIT compilation for maximum performance
 - Thread-safe and vectorizable operations
 - Identical numerical behavior to C++ implementation
+- Simplified API with automatic derivative computation
 
 Basic Usage:
     import jax.numpy as jnp
-    import altro
+    import jaxaltro as altro
 
     # Create solver
     solver = altro.ALTROSolver(horizon_length=50)
@@ -175,9 +165,17 @@ Basic Usage:
     # Set problem dimensions
     solver.set_dimension(num_states=4, num_inputs=2)
 
-    # Set dynamics and cost functions
-    solver.set_explicit_dynamics(dynamics_func, dynamics_jac)
-    solver.set_lqr_cost(num_states=4, num_inputs=2, Q_diag, R_diag, x_ref, u_ref)
+    # Define dynamics function (Jacobian computed automatically)
+    def dynamics(x, u, h):
+        return x + h * dynamics_rhs(x, u)
+
+    # Define cost function (gradients/Hessians computed automatically)
+    def cost(x, u):
+        return 0.5 * x.T @ Q @ x + 0.5 * u.T @ R @ u
+
+    # Set functions - derivatives computed automatically!
+    solver.set_explicit_dynamics(dynamics)
+    solver.set_cost_function(cost)
 
     # Initialize and solve
     solver.set_initial_state(x0, n=4)
@@ -247,7 +245,5 @@ _check_jax_installation()
 
 # Enable 64-bit precision for numerical stability
 jax.config.update("jax_enable_x64", True)
-# Enable JIT compilation
-jax.config.update("jax_disable_jit", False)
 # Enable JIT compilation
 jax.config.update("jax_disable_jit", False)

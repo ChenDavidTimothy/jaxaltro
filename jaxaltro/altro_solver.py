@@ -17,13 +17,9 @@ from .types import (
     LAST_INDEX,
     CallbackFunction,
     ConstraintFunction,
-    ConstraintJacobian,
     ConstraintType,
     CostFunction,
-    CostGradient,
-    CostHessian,
     ExplicitDynamicsFunction,
-    ExplicitDynamicsJacobian,
     Float,
     SolveStatus,
 )
@@ -45,7 +41,7 @@ class ALTROSolver:
     """Main ALTRO solver interface matching C++ ALTROSolver class.
 
     This class provides the complete user-facing API for trajectory optimization
-    using the ALTRO algorithm with JAX acceleration.
+    using the ALTRO algorithm with JAX acceleration and automatic differentiation.
     """
 
     def __init__(self, horizon_length: int):
@@ -108,15 +104,13 @@ class ALTROSolver:
     def set_explicit_dynamics(
         self,
         dynamics_function: ExplicitDynamicsFunction,
-        dynamics_jacobian: ExplicitDynamicsJacobian,
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set explicit dynamics matching C++ SetExplicitDynamics.
+        """Set explicit dynamics with automatic Jacobian computation.
 
         Args:
             dynamics_function: Dynamics function
-            dynamics_jacobian: Dynamics Jacobian function
             k_start: Starting knot point index
             k_stop: Ending knot point index (non-inclusive)
         """
@@ -124,29 +118,25 @@ class ALTROSolver:
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set dynamics")
 
         for k in range(k_start, k_stop):
-            self.solver.data[k].set_dynamics(dynamics_function, dynamics_jacobian)
+            self.solver.data[k].set_dynamics(dynamics_function)
 
     def set_cost_function(
         self,
         cost_function: CostFunction,
-        cost_gradient: CostGradient,
-        cost_hessian: CostHessian,
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set generic cost function matching C++ SetCostFunction.
+        """Set generic cost function with automatic gradient/Hessian computation.
 
         Args:
             cost_function: Cost function
-            cost_gradient: Cost gradient function
-            cost_hessian: Cost Hessian function
             k_start: Starting knot point index
             k_stop: Ending knot point index (non-inclusive)
         """
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
 
         for k in range(k_start, k_stop):
-            self.solver.data[k].set_cost_function(cost_function, cost_gradient, cost_hessian)
+            self.solver.data[k].set_cost_function(cost_function)
 
     def set_diagonal_cost(
         self,
@@ -278,7 +268,6 @@ class ALTROSolver:
     def set_constraint(
         self,
         constraint_function: ConstraintFunction,
-        constraint_jacobian: ConstraintJacobian,
         dim: int,
         constraint_type: ConstraintType,
         label: str,
@@ -286,11 +275,10 @@ class ALTROSolver:
         k_stop: int = 0,
         con_inds: list[ConstraintIndex] | None = None,
     ) -> None:
-        """Set constraint matching C++ SetConstraint.
+        """Set constraint with automatic Jacobian computation.
 
         Args:
             constraint_function: Constraint function
-            constraint_jacobian: Constraint Jacobian function
             dim: Constraint dimension
             constraint_type: Type of constraint
             label: Descriptive label
@@ -319,9 +307,7 @@ class ALTROSolver:
 
             # Add constraint to knot point
             ncon = self.solver.data[k].num_constraints()
-            self.solver.data[k].set_constraint(
-                constraint_function, constraint_jacobian, dim, constraint_type, label_k
-            )
+            self.solver.data[k].set_constraint(constraint_function, dim, constraint_type, label_k)
 
             # Store constraint index
             if con_inds is not None:

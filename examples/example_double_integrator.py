@@ -2,8 +2,8 @@
 
 This example replicates the C++ double integrator test case, showing how to:
 1. Set up a trajectory optimization problem
-2. Define dynamics and cost functions
-3. Add constraints
+2. Define dynamics functions (Jacobians computed automatically)
+3. Add constraints (Jacobians computed automatically)
 4. Solve the optimization problem
 5. Extract and analyze results
 
@@ -23,8 +23,8 @@ from jaxaltro import AltroOptions, ALTROSolver, ConstraintType, Verbosity
 from jaxaltro.types import Float
 
 
-def create_double_integrator_dynamics(dim: int = 2) -> tuple[callable, callable]:
-    """Create double integrator dynamics functions.
+def create_double_integrator_dynamics(dim: int = 2) -> callable:
+    """Create double integrator dynamics function.
 
     State: [position, velocity] (2*dim dimensional)
     Input: [acceleration] (dim dimensional)
@@ -36,7 +36,7 @@ def create_double_integrator_dynamics(dim: int = 2) -> tuple[callable, callable]
         dim: Spatial dimension (2 for 2D double integrator)
 
     Returns:
-        Tuple of (dynamics_function, dynamics_jacobian)
+        Dynamics function (Jacobian computed automatically by JAX)
     """
 
     @jax.jit
@@ -53,39 +53,18 @@ def create_double_integrator_dynamics(dim: int = 2) -> tuple[callable, callable]
 
         return jnp.concatenate([pos_next, vel_next])
 
-    @jax.jit
-    def dynamics_jacobian(x: Array, u: Array, h: Float) -> Array:
-        """Jacobian of double integrator dynamics."""
-        n = 2 * dim  # State dimension
-        m = dim  # Input dimension
-
-        # Jacobian is constant for linear dynamics
-        # J = [A, B] where A is (n,n) and B is (n,m)
-
-        # A matrix: [[I, h*I], [0, I]]
-        A = jnp.zeros((n, n))
-        A = A.at[:dim, :dim].set(jnp.eye(dim))  # I
-        A = A.at[:dim, dim:].set(h * jnp.eye(dim))  # h*I
-        A = A.at[dim:, dim:].set(jnp.eye(dim))  # I
-
-        # B matrix: [[0.5*h^2*I], [h*I]]
-        B = jnp.zeros((n, m))
-        B = B.at[:dim, :].set(0.5 * h**2 * jnp.eye(dim))  # 0.5*h^2*I
-        B = B.at[dim:, :].set(h * jnp.eye(dim))  # h*I
-
-        return jnp.hstack([A, B])
-
-    return dynamics_function, dynamics_jacobian
+    # Note: No manual Jacobian needed! JAX computes it automatically
+    return dynamics_function
 
 
-def create_goal_constraint(x_goal: Array) -> tuple[callable, callable]:
-    """Create goal constraint functions.
+def create_goal_constraint(x_goal: Array) -> callable:
+    """Create goal constraint function.
 
     Args:
         x_goal: Target state
 
     Returns:
-        Tuple of (constraint_function, constraint_jacobian)
+        Constraint function (Jacobian computed automatically by JAX)
     """
 
     @jax.jit
@@ -93,19 +72,39 @@ def create_goal_constraint(x_goal: Array) -> tuple[callable, callable]:
         """Goal constraint: x - x_goal = 0."""
         return x - x_goal
 
+    # Note: No manual Jacobian needed! JAX computes it automatically
+    return constraint_function
+
+
+def create_lqr_cost_function(
+    Q_diag: Array, R_diag: Array, x_ref: Array, u_ref: Array, is_terminal: bool = False
+) -> callable:
+    """Create LQR cost function.
+
+    Args:
+        Q_diag: Diagonal state penalty matrix
+        R_diag: Diagonal input penalty matrix
+        x_ref: State reference
+        u_ref: Input reference
+        is_terminal: Whether this is a terminal cost
+
+    Returns:
+        Cost function (gradients/Hessians computed automatically by JAX)
+    """
+
     @jax.jit
-    def constraint_jacobian(x: Array, u: Array) -> Array:
-        """Jacobian of goal constraint."""
-        n = x.shape[0]
-        m = u.shape[0]
+    def cost_function(x: Array, u: Array) -> Float:
+        """LQR cost: (x-xref)^T Q (x-xref) + (u-uref)^T R (u-uref)."""
+        dx = x - x_ref
+        cost = 0.5 * jnp.dot(dx, Q_diag * dx)
 
-        # Jacobian is [I, 0] (identity wrt x, zero wrt u)
-        jac = jnp.zeros((n, n + m))
-        jac = jac.at[:, :n].set(jnp.eye(n))
+        if not is_terminal and len(u) > 0:
+            du = u - u_ref
+            cost += 0.5 * jnp.dot(du, R_diag * du)
 
-        return jac
+        return cost
 
-    return constraint_function, constraint_jacobian
+    return cost_function
 
 
 def solve_double_integrator_example():
@@ -146,30 +145,25 @@ def solve_double_integrator_example():
     solver.set_dimension(n, m)
     solver.set_time_step(h)
 
-    # Set dynamics
-    dynamics_func, dynamics_jac = create_double_integrator_dynamics(dim)
-    solver.set_explicit_dynamics(dynamics_func, dynamics_jac)
+    # Set dynamics - ONLY the function, Jacobian computed automatically!
+    dynamics_func = create_double_integrator_dynamics(dim)
+    solver.set_explicit_dynamics(dynamics_func)
 
-    # Set cost function
-    solver.set_lqr_cost(n, m, Q_diag, R_diag, x_goal, jnp.zeros(m), k_start=0, k_stop=num_segments)
+    # Set cost functions using automatic differentiation
+    # Running cost
+    running_cost = create_lqr_cost_function(Q_diag, R_diag, x_goal, jnp.zeros(m), is_terminal=False)
+    solver.set_cost_function(running_cost, k_start=0, k_stop=num_segments)
 
-    # Set terminal cost
-    solver.set_lqr_cost(
-        n,
-        0,
-        Qf_diag,
-        jnp.array([]),
-        x_goal,
-        jnp.array([]),
-        k_start=num_segments,
-        k_stop=num_segments + 1,
+    # Terminal cost
+    terminal_cost = create_lqr_cost_function(
+        Qf_diag, jnp.array([]), x_goal, jnp.array([]), is_terminal=True
     )
+    solver.set_cost_function(terminal_cost, k_start=num_segments, k_stop=num_segments + 1)
 
-    # Set goal constraint
-    goal_constraint_func, goal_constraint_jac = create_goal_constraint(x_goal)
+    # Set goal constraint - ONLY the function, Jacobian computed automatically!
+    goal_constraint_func = create_goal_constraint(x_goal)
     solver.set_constraint(
         goal_constraint_func,
-        goal_constraint_jac,
         n,
         ConstraintType.EQUALITY,
         "Goal Constraint",
@@ -240,20 +234,85 @@ def solve_double_integrator_example():
     return solver
 
 
+def demonstrate_automatic_differentiation():
+    """Demonstrate the automatic differentiation capabilities."""
+
+    print("\n" + "=" * 60)
+    print("AUTOMATIC DIFFERENTIATION DEMONSTRATION")
+    print("=" * 60)
+
+    # Create dynamics function
+    dynamics_func = create_double_integrator_dynamics(dim=2)
+
+    # Test point
+    x_test = jnp.array([1.0, 2.0, 0.5, -0.3])
+    u_test = jnp.array([0.1, -0.2])
+    h_test = 0.1
+
+    print("\nDynamics function evaluation:")
+    print(f"x = {x_test}")
+    print(f"u = {u_test}")
+    print(f"h = {h_test}")
+
+    # Evaluate dynamics
+    x_next = dynamics_func(x_test, u_test, h_test)
+    print(f"x_next = f(x, u, h) = {x_next}")
+
+    # Compute Jacobian automatically using JAX
+    def dynamics_combined(xu):
+        n = len(x_test)
+        x_part, u_part = xu[:n], xu[n:]
+        return dynamics_func(x_part, u_part, h_test)
+
+    jacobian_func = jax.jacobian(dynamics_combined)
+    xu_combined = jnp.concatenate([x_test, u_test])
+    jacobian = jacobian_func(xu_combined)
+
+    print("\nJacobian (computed automatically):")
+    print(f"Shape: {jacobian.shape}")
+    print(f"df/dx:\n{jacobian[:, :4]}")
+    print(f"df/du:\n{jacobian[:, 4:]}")
+
+    # Show cost function automatic differentiation
+    cost_func = create_lqr_cost_function(
+        Q_diag=jnp.ones(4), R_diag=0.01 * jnp.ones(2), x_ref=jnp.zeros(4), u_ref=jnp.zeros(2)
+    )
+
+    print("\nCost function evaluation:")
+    cost_val = cost_func(x_test, u_test)
+    print(f"J(x, u) = {cost_val}")
+
+    # Compute gradients automatically
+    grad_x = jax.grad(cost_func, argnums=0)(x_test, u_test)
+    grad_u = jax.grad(cost_func, argnums=1)(x_test, u_test)
+
+    print(f"∇_x J = {grad_x}")
+    print(f"∇_u J = {grad_u}")
+
+    # Compute Hessians automatically
+    hess_xx = jax.hessian(cost_func, argnums=0)(x_test, u_test)
+    hess_uu = jax.hessian(cost_func, argnums=1)(x_test, u_test)
+
+    print(f"∇²_xx J shape: {hess_xx.shape}")
+    print(f"∇²_uu J shape: {hess_uu.shape}")
+
+    print("\n✅ All derivatives computed automatically by JAX!")
+    print("   No manual derivative implementations required!")
+
+
 if __name__ == "__main__":
-    """Run the double integrator example."""
+    """Run the double integrator example with automatic differentiation."""
 
     print("JAX-based ALTRO Double Integrator Example")
+    print("With Automatic Differentiation")
     print("=" * 50)
 
     try:
         solver = solve_double_integrator_example()
         print("\nExample completed successfully!")
 
-        # Optionally print trajectories
-        print("\nTo visualize results, you can extract the full trajectory:")
-        print("  states = [solver.get_state(k) for k in range(solver.get_horizon_length() + 1)]")
-        print("  inputs = [solver.get_input(k) for k in range(solver.get_horizon_length())]")
+        # Demonstrate automatic differentiation
+        demonstrate_automatic_differentiation()
 
     except Exception as e:
         print(f"\nError running example: {e}")
