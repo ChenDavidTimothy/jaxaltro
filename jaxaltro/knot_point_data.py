@@ -7,7 +7,6 @@ KnotPointData class, maintaining identical data organization and computational m
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, cast
 
 import jax
@@ -158,19 +157,12 @@ def _get_or_create_constraint_jacobian(
     return cast(_ConstraintJacobian, _compiled_functions_cache[cache_key])
 
 
-class CostFunctionType(Enum):
-    """Cost function types matching C++ CostFunType enum."""
-
-    GENERIC = "Generic"
-    QUADRATIC = "Quadratic"
-    DIAGONAL = "Diagonal"
-
-
 @dataclass
 class KnotPointData:
     """Knot point data structure matching C++ KnotPointData class.
 
     Contains all data associated with a single time step in the trajectory optimization problem.
+    Uses only JAX automatic differentiation - no manual gradient computation.
     """
 
     # Basic properties
@@ -183,19 +175,10 @@ class KnotPointData:
     num_next_states: int = 0
     timestep: Float = 0.0
 
-    # Cost function data
-    cost_function_type: CostFunctionType = CostFunctionType.GENERIC
+    # Cost function data - JAX autodiff only
     cost_function: CostFunction | None = None
     cost_gradient: _CostGradient | None = None
     cost_hessian: _CostHessian | None = None
-
-    # Quadratic cost matrices
-    Q: Array | None = None  # State cost matrix (vectorized for diagonal)
-    R: Array | None = None  # Control cost matrix (vectorized for diagonal)
-    H: Array | None = None  # Cross-term cost matrix
-    q: Array | None = None  # Linear state cost
-    r: Array | None = None  # Linear control cost
-    c: Float = 0.0  # Constant cost term
 
     # Dynamics data
     dynamics_are_linear: bool = False
@@ -335,66 +318,13 @@ class KnotPointData:
 
         self.timestep = timestep
 
-    def set_quadratic_cost(
-        self,
-        n: int,
-        m: int,
-        Q_mat: Array,
-        R_mat: Array,
-        H_mat: Array,
-        q_vec: Array,
-        r_vec: Array,
-        c: Float,
-    ) -> None:
-        """Set quadratic cost function matching C++ SetQuadraticCost."""
-        if self.num_states > 0 and self.num_states != n:
-            _altro_throw("State dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
-        if self.num_inputs > 0 and self.num_inputs != m:
-            _altro_throw("Input dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
-
-        self.Q = Q_mat.flatten()  # Store as vector for consistency with C++
-        self.R = R_mat.flatten()
-        self.H = H_mat
-        self.q = q_vec
-        self.r = r_vec
-        self.c = c
-
-        self.cost_function_type = CostFunctionType.QUADRATIC
-        self.cost_function_is_set = True
-
-    def set_diagonal_cost(
-        self, n: int, m: int, Q_diag: Array, R_diag: Array, q_vec: Array, r_vec: Array, c: Float
-    ) -> None:
-        """Set diagonal cost function matching C++ SetDiagonalCost."""
-        if self.num_states > 0 and self.num_states != n:
-            _altro_throw("State dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
-        if self.num_inputs > 0 and self.num_inputs != m:
-            _altro_throw("Input dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
-
-        # Store diagonal elements in first n elements (matching C++ implementation)
-        self.Q = jnp.zeros(n * n)
-        self.Q = self.Q.at[:n].set(Q_diag)
-
-        self.H = jnp.zeros((m, n))
-        self.q = q_vec
-        self.c = c
-
-        if not self.is_terminal:
-            self.R = jnp.zeros(m * m)
-            self.R = self.R.at[:m].set(R_diag)
-            self.r = r_vec
-
-        self.cost_function_type = CostFunctionType.DIAGONAL
-        self.cost_function_is_set = True
-
     def set_cost_function(self, cost_function: CostFunction) -> None:
-        """Set generic cost function with cached automatic gradient/Hessian computation."""
+        """Set cost function with automatic JAX gradient/Hessian computation."""
         self.cost_function = cost_function
 
         # Get cached derivative functions (compiled once, reused across knot points)
         self.cost_gradient, self.cost_hessian = _get_or_create_cost_derivatives(cost_function)
 
-        self.cost_function_type = CostFunctionType.GENERIC
         self.cost_function_is_set = True
 
     def set_linear_dynamics(
@@ -580,27 +510,6 @@ class KnotPointData:
         self.dx_da_ = jnp.zeros(n)
         self.du_da_ = jnp.zeros(m)
 
-        # Calculate constant Hessian if quadratic
-        if self.cost_function_type != CostFunctionType.GENERIC:
-            self._calc_original_cost_hessian()
-
-        # Set linear cost gradients for LQ problems
-        if self.is_terminal and self.cost_function_type != CostFunctionType.GENERIC:
-            assert self.q is not None
-            self.lx_ = self.q
-
-        if (
-            not self.is_terminal
-            and self.cost_function_type != CostFunctionType.GENERIC
-            and self.dynamics_are_linear
-        ):
-            assert self.q is not None
-            assert self.r is not None
-            assert self.affine_term is not None
-            self.lx_ = self.q
-            self.lu_ = self.r
-            self.f_ = self.affine_term
-
         self.is_initialized = True
 
     def get_state_dim(self) -> int:
@@ -632,8 +541,8 @@ class KnotPointData:
         return self.dynamics_are_linear
 
     def cost_function_is_quadratic(self) -> bool:
-        """Check if cost function is quadratic."""
-        return self.cost_function_type != CostFunctionType.GENERIC
+        """Check if cost function is quadratic - always False since we only use JAX autodiff."""
+        return False
 
     def calc_dynamics(self, x_next: Array) -> Array:
         """Calculate dynamics matching C++ CalcDynamics."""
@@ -682,8 +591,8 @@ class KnotPointData:
             self.f_ = jnp.zeros_like(self.f_)
 
     def calc_cost(self) -> Float:
-        """Calculate cost including Augmented Lagrangian terms matching C++ CalcCost."""
-        # Original cost
+        """Calculate cost including Augmented Lagrangian terms using JAX autodiff."""
+        # Original cost using JAX autodiff
         cost = self._calc_original_cost()
 
         # Add Augmented Lagrangian constraint terms
@@ -693,16 +602,16 @@ class KnotPointData:
         return cost + al_cost
 
     def calc_cost_gradient(self) -> None:
-        """Calculate cost gradient matching C++ CalcCostGradient."""
-        # Original cost gradient
+        """Calculate cost gradient using JAX autodiff."""
+        # Original cost gradient using JAX autodiff
         self._calc_original_cost_gradient()
 
         # Add Augmented Lagrangian constraint gradient terms
         self._calc_constraint_cost_gradients()
 
     def calc_cost_hessian(self) -> None:
-        """Calculate cost Hessian matching C++ CalcCostHessian."""
-        # Original cost Hessian
+        """Calculate cost Hessian using JAX autodiff."""
+        # Original cost Hessian using JAX autodiff
         self._calc_original_cost_hessian()
 
         # Add Augmented Lagrangian constraint Hessian terms
@@ -871,101 +780,25 @@ class KnotPointData:
                 )
 
     def _calc_original_cost(self) -> Float:
-        n = self.get_state_dim()
-        m = self.get_input_dim()
-
+        """Calculate original cost using JAX autodiff only."""
         assert self.x_ is not None
         assert self.u_ is not None
+        assert self.cost_function is not None
 
-        if self.cost_function_type == CostFunctionType.GENERIC:
-            assert self.cost_function is not None
-            return float(self.cost_function(self.x_, self.u_))
-        elif self.cost_function_type == CostFunctionType.QUADRATIC:
-            assert self.Q is not None
-            assert self.q is not None
-            Q_mat = self.Q.reshape(n, n)
-            cost = 0.5 * self.x_.T @ Q_mat @ self.x_ + self.q.T @ self.x_
-
-            if not self.is_terminal:
-                assert self.R is not None
-                assert self.r is not None
-                assert self.H is not None
-                R_mat = self.R.reshape(m, m)
-                cost += 0.5 * self.u_.T @ R_mat @ self.u_ + self.r.T @ self.u_
-                cost += self.u_.T @ self.H @ self.x_
-
-            cost += self.c
-            return float(cost)
-        elif self.cost_function_type == CostFunctionType.DIAGONAL:
-            assert self.Q is not None
-            assert self.q is not None
-            cost = 0.5 * self.x_.T @ jnp.diag(self.Q[:n]) @ self.x_ + self.q.T @ self.x_
-
-            if not self.is_terminal:
-                assert self.R is not None
-                assert self.r is not None
-                cost += 0.5 * self.u_.T @ jnp.diag(self.R[:m]) @ self.u_ + self.r.T @ self.u_
-
-            cost += self.c
-            return float(cost)
-
-        # This should never be reached due to all enum cases being covered
-        _altro_throw("Invalid cost function type", ErrorCode.COST_FUN_NOT_SET)
+        return float(self.cost_function(self.x_, self.u_))
 
     def _calc_original_cost_gradient(self) -> None:
-        n = self.get_state_dim()
-        m = self.get_input_dim()
-
+        """Calculate original cost gradient using JAX autodiff only."""
         assert self.x_ is not None
         assert self.u_ is not None
+        assert self.cost_gradient is not None
 
-        if self.cost_function_type == CostFunctionType.GENERIC:
-            assert self.cost_gradient is not None
-            self.lx_, self.lu_ = self.cost_gradient(self.x_, self.u_)
-        elif self.cost_function_type == CostFunctionType.QUADRATIC:
-            assert self.Q is not None
-            assert self.q is not None
-            Q_mat = self.Q.reshape(n, n)
-            self.lx_ = Q_mat @ self.x_ + self.q
-
-            if not self.is_terminal:
-                assert self.R is not None
-                assert self.r is not None
-                assert self.H is not None
-                R_mat = self.R.reshape(m, m)
-                self.lu_ = R_mat @ self.u_ + self.r + self.H @ self.x_
-                self.lx_ = self.lx_ + self.H.T @ self.u_
-        elif self.cost_function_type == CostFunctionType.DIAGONAL:
-            assert self.Q is not None
-            assert self.q is not None
-            self.lx_ = self.Q[:n] * self.x_ + self.q
-
-            if not self.is_terminal:
-                assert self.R is not None
-                assert self.r is not None
-                self.lu_ = self.R[:m] * self.u_ + self.r
+        self.lx_, self.lu_ = self.cost_gradient(self.x_, self.u_)
 
     def _calc_original_cost_hessian(self) -> None:
-        n = self.get_state_dim()
-        m = self.get_input_dim()
+        """Calculate original cost Hessian using JAX autodiff only."""
+        assert self.x_ is not None
+        assert self.u_ is not None
+        assert self.cost_hessian is not None
 
-        if self.cost_function_type == CostFunctionType.GENERIC:
-            assert self.cost_hessian is not None
-            assert self.x_ is not None
-            assert self.u_ is not None
-            self.lxx_, self.luu_, self.lux_ = self.cost_hessian(self.x_, self.u_)
-        elif self.cost_function_type == CostFunctionType.QUADRATIC:
-            assert self.Q is not None
-            self.lxx_ = self.Q.reshape(n, n)
-            if not self.is_terminal:
-                assert self.R is not None
-                assert self.H is not None
-                self.luu_ = self.R.reshape(m, m)
-                self.lux_ = self.H
-        elif self.cost_function_type == CostFunctionType.DIAGONAL:
-            assert self.Q is not None
-            self.lxx_ = jnp.diag(self.Q[:n])
-            if not self.is_terminal:
-                assert self.R is not None
-                self.luu_ = jnp.diag(self.R[:m])
-                self.lux_ = jnp.zeros((m, n))
+        self.lxx_, self.luu_, self.lux_ = self.cost_hessian(self.x_, self.u_)

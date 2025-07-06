@@ -8,7 +8,7 @@ This example replicates the C++ double integrator test case, showing how to:
 5. Extract and analyze results
 
 The problem is to control a 2D double integrator from an initial state to the origin
-while minimizing control effort.
+while minimizing control effort. Uses only JAX automatic differentiation.
 """
 
 from __future__ import annotations
@@ -53,7 +53,6 @@ def create_double_integrator_dynamics(dim: int = 2) -> callable:
 
         return jnp.concatenate([pos_next, vel_next])
 
-    # Note: No manual Jacobian needed! JAX computes it automatically
     return dynamics_function
 
 
@@ -72,14 +71,13 @@ def create_goal_constraint(x_goal: Array) -> callable:
         """Goal constraint: x - x_goal = 0."""
         return x - x_goal
 
-    # Note: No manual Jacobian needed! JAX computes it automatically
     return constraint_function
 
 
 def create_lqr_cost_function(
     Q_diag: Array, R_diag: Array, x_ref: Array, u_ref: Array, is_terminal: bool = False
 ) -> callable:
-    """Create LQR cost function.
+    """Create LQR cost function using JAX.
 
     Args:
         Q_diag: Diagonal state penalty matrix
@@ -137,6 +135,7 @@ def solve_double_integrator_example():
     print(f"  Time step: {h:.3f} seconds")
     print(f"  Initial state: {x0}")
     print(f"  Goal state: {x_goal}")
+    print("  Using JAX automatic differentiation for all derivatives")
 
     # Create solver
     solver = ALTROSolver(num_segments)
@@ -145,22 +144,33 @@ def solve_double_integrator_example():
     solver.set_dimension(n, m)
     solver.set_time_step(h)
 
-    # Set dynamics - ONLY the function, Jacobian computed automatically!
+    # Set dynamics - JAX computes Jacobian automatically
     dynamics_func = create_double_integrator_dynamics(dim)
     solver.set_explicit_dynamics(dynamics_func)
 
-    # Set cost functions using automatic differentiation
-    # Running cost
-    running_cost = create_lqr_cost_function(Q_diag, R_diag, x_goal, jnp.zeros(m), is_terminal=False)
-    solver.set_cost_function(running_cost, k_start=0, k_stop=num_segments)
+    # Method 1: Use built-in LQR cost (uses JAX autodiff internally)
+    solver.set_lqr_cost(n, m, Q_diag, R_diag, x_goal, jnp.zeros(m), k_start=0, k_stop=num_segments)
 
     # Terminal cost
-    terminal_cost = create_lqr_cost_function(
-        Qf_diag, jnp.array([]), x_goal, jnp.array([]), is_terminal=True
+    solver.set_lqr_cost(
+        n,
+        0,
+        Qf_diag,
+        jnp.array([]),
+        x_goal,
+        jnp.array([]),
+        k_start=num_segments,
+        k_stop=num_segments + 1,
     )
-    solver.set_cost_function(terminal_cost, k_start=num_segments, k_stop=num_segments + 1)
 
-    # Set goal constraint - ONLY the function, Jacobian computed automatically!
+    # Alternative Method 2: Use custom cost function (also uses JAX autodiff)
+    # running_cost = create_lqr_cost_function(Q_diag, R_diag, x_goal, jnp.zeros(m), is_terminal=False)
+    # solver.set_cost_function(running_cost, k_start=0, k_stop=num_segments)
+    #
+    # terminal_cost = create_lqr_cost_function(Qf_diag, jnp.array([]), x_goal, jnp.array([]), is_terminal=True)
+    # solver.set_cost_function(terminal_cost, k_start=num_segments, k_stop=num_segments + 1)
+
+    # Set goal constraint - JAX computes Jacobian automatically
     goal_constraint_func = create_goal_constraint(x_goal)
     solver.set_constraint(
         goal_constraint_func,
@@ -234,11 +244,11 @@ def solve_double_integrator_example():
     return solver
 
 
-def demonstrate_automatic_differentiation():
-    """Demonstrate the automatic differentiation capabilities."""
+def demonstrate_jax_autodiff_only():
+    """Demonstrate the pure JAX automatic differentiation approach."""
 
     print("\n" + "=" * 60)
-    print("AUTOMATIC DIFFERENTIATION DEMONSTRATION")
+    print("PURE JAX AUTOMATIC DIFFERENTIATION DEMONSTRATION")
     print("=" * 60)
 
     # Create dynamics function
@@ -268,7 +278,7 @@ def demonstrate_automatic_differentiation():
     xu_combined = jnp.concatenate([x_test, u_test])
     jacobian = jacobian_func(xu_combined)
 
-    print("\nJacobian (computed automatically):")
+    print("\nJacobian (computed automatically by JAX):")
     print(f"Shape: {jacobian.shape}")
     print(f"df/dx:\n{jacobian[:, :4]}")
     print(f"df/du:\n{jacobian[:, 4:]}")
@@ -297,22 +307,23 @@ def demonstrate_automatic_differentiation():
     print(f"∇²_uu J shape: {hess_uu.shape}")
 
     print("\n✅ All derivatives computed automatically by JAX!")
-    print("   No manual derivative implementations required!")
+    print("   Zero manual derivative implementations!")
+    print("   Cleaner, faster, and more reliable code!")
 
 
 if __name__ == "__main__":
-    """Run the double integrator example with automatic differentiation."""
+    """Run the double integrator example with pure JAX automatic differentiation."""
 
     print("JAX-based ALTRO Double Integrator Example")
-    print("With Automatic Differentiation")
-    print("=" * 50)
+    print("Pure JAX Automatic Differentiation - No Manual Derivatives")
+    print("=" * 60)
 
     try:
         solver = solve_double_integrator_example()
         print("\nExample completed successfully!")
 
-        # Demonstrate automatic differentiation
-        demonstrate_automatic_differentiation()
+        # Demonstrate pure JAX automatic differentiation
+        demonstrate_jax_autodiff_only()
 
     except Exception as e:
         print(f"\nError running example: {e}")

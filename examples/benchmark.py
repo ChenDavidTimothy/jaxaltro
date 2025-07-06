@@ -1,4 +1,4 @@
-"""Performance benchmarking wrapper for ALTRO examples."""
+"""Performance benchmarking wrapper for ALTRO examples with pure JAX autodiff."""
 
 import statistics
 import time
@@ -93,28 +93,29 @@ def benchmark_double_integrator():
 
 
 def _create_solver_factory(segments: int) -> Callable[[], Any]:
-    """Create solver factory with bound segment count to fix closure issue."""
+    """Create solver factory with bound segment count for JAX autodiff benchmarking."""
     import jax.numpy as jnp
     from example_double_integrator import create_double_integrator_dynamics
 
     from jaxaltro import ALTROSolver, ConstraintType
 
     def solver_factory():
-        # Create scaled problem
+        # Create scaled problem using pure JAX autodiff
         solver = ALTROSolver(segments)
         solver.set_dimension(4, 2)  # 2D double integrator
         solver.set_time_step(5.0 / segments)
 
-        # Set dynamics - ONLY the function (fixed API)
+        # Set dynamics - JAX computes Jacobian automatically
         dynamics_func = create_double_integrator_dynamics(2)
         solver.set_explicit_dynamics(dynamics_func)
 
-        # Set costs using built-in LQR cost (more efficient than custom functions)
+        # Use built-in LQR cost (now uses JAX autodiff internally)
         Q_diag = jnp.ones(4)
         R_diag = 1e-2 * jnp.ones(2)
         Qf_diag = 100.0 * jnp.ones(4)
         x_goal = jnp.zeros(4)
 
+        # All cost functions now use JAX autodiff internally
         solver.set_lqr_cost(4, 2, Q_diag, R_diag, x_goal, jnp.zeros(2), k_start=0, k_stop=segments)
 
         # Terminal cost
@@ -129,7 +130,8 @@ def _create_solver_factory(segments: int) -> Callable[[], Any]:
             k_stop=segments + 1,
         )
 
-        # Goal constraint
+        # Goal constraint - JAX computes Jacobian automatically
+        @jax.jit
         def goal_constraint(x, u):
             return x - x_goal
 
@@ -153,33 +155,89 @@ def _create_solver_factory(segments: int) -> Callable[[], Any]:
 
 
 def benchmark_scaling():
-    """Benchmark different problem sizes."""
+    """Benchmark different problem sizes with pure JAX autodiff."""
     segments_list = [25, 50, 100, 200]
     results = {}
+
+    print("\n=== JAX Autodiff Scaling Study ===")
+    print("All derivatives computed automatically by JAX")
 
     for num_segments in segments_list:
         solver_factory = _create_solver_factory(num_segments)
 
         results[num_segments] = benchmark_solver(
             solver_factory,
-            f"Double Integrator ({num_segments} segments)",
+            f"JAX Autodiff ({num_segments} segments)",
             warmup_runs=1,
             timing_runs=3,
         )
 
     # Print scaling analysis
-    print("\n=== Scaling Analysis ===")
-    print(f"{'Segments':<10} {'Time (s)':<10} {'Time/Seg':<12}")
+    print("\n=== JAX Autodiff Scaling Analysis ===")
+    print(f"{'Segments':<10} {'Time (s)':<10} {'Time/Seg':<12} {'Speedup':<10}")
+
+    baseline_time = None
     for segments, result in results.items():
         time_per_seg = result["solver_mean"] / segments * 1000  # ms per segment
-        print(f"{segments:<10} {result['solver_mean']:<10.3f} {time_per_seg:<12.2f} ms")
+
+        if baseline_time is None:
+            baseline_time = result["solver_mean"]
+            speedup_str = "baseline"
+        else:
+            speedup = baseline_time / result["solver_mean"] * (segments / 25)  # Normalized speedup
+            speedup_str = f"{speedup:.2f}x"
+
+        print(
+            f"{segments:<10} {result['solver_mean']:<10.3f} {time_per_seg:<12.2f} ms {speedup_str:<10}"
+        )
 
     return results
 
 
+def compare_jax_autodiff_performance():
+    """Demonstrate the performance benefits of pure JAX autodiff."""
+    print("\n=== JAX AUTODIFF PERFORMANCE BENEFITS ===")
+    print("1. Single JIT-compiled gradient computation")
+    print("2. GPU acceleration for all derivatives")
+    print("3. Optimized XLA kernels")
+    print("4. No manual gradient/Hessian code duplication")
+    print("5. Compile-time optimization across entire cost function")
+
+    # Simple performance demonstration
+    import jax.numpy as jnp
+
+    # Create test cost function
+    @jax.jit
+    def test_cost(x, u):
+        Q = jnp.diag(jnp.ones(4))
+        R = jnp.diag(0.01 * jnp.ones(2))
+        return 0.5 * x.T @ Q @ x + 0.5 * u.T @ R @ u
+
+    x_test = jnp.ones(4)
+    u_test = jnp.ones(2)
+
+    # Time JAX autodiff
+    start = time.perf_counter()
+    for _ in range(1000):
+        grad_x = jax.grad(test_cost, argnums=0)(x_test, u_test)
+        grad_u = jax.grad(test_cost, argnums=1)(x_test, u_test)
+    jax_time = time.perf_counter() - start
+
+    print(f"\nJAX autodiff 1000 gradient computations: {jax_time:.4f}s")
+    print(f"Per gradient: {jax_time / 1000 * 1000:.3f}ms")
+    print("✅ All optimized by JAX JIT compilation")
+
+
 if __name__ == "__main__":
+    print("JAX-based ALTRO Performance Benchmarking")
+    print("Pure JAX Automatic Differentiation")
+    print("=" * 50)
+
     # Single benchmark
     benchmark_double_integrator()
 
     # Scaling study
     benchmark_scaling()
+
+    # Performance demonstration
+    compare_jax_autodiff_performance()

@@ -6,6 +6,9 @@ altro_solver.hpp/cpp implementation, maintaining identical interface and functio
 
 from __future__ import annotations
 
+import functools
+
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -37,11 +40,62 @@ class ConstraintIndex:
         return self.knot_point_index
 
 
+# Shared JAX cost function templates (compiled once, reused globally)
+@jax.jit
+def _shared_lqr_terminal_cost(x: Array, u: Array, Q_diag: Array, x_ref: Array) -> Float:
+    """Shared terminal LQR cost function (state cost only)."""
+    dx = x - x_ref
+    return 0.5 * jnp.dot(dx, Q_diag * dx)
+
+
+@jax.jit
+def _shared_lqr_running_cost(
+    x: Array, u: Array, Q_diag: Array, R_diag: Array, x_ref: Array, u_ref: Array
+) -> Float:
+    """Shared running LQR cost function (state + input cost)."""
+    dx = x - x_ref
+    du = u - u_ref
+    return 0.5 * jnp.dot(dx, Q_diag * dx) + 0.5 * jnp.dot(du, R_diag * du)
+
+
+@jax.jit
+def _shared_diagonal_terminal_cost(x: Array, u: Array, Q_diag: Array, q: Array, c: Float) -> Float:
+    """Shared terminal diagonal cost function (state cost only)."""
+    return 0.5 * jnp.dot(x, Q_diag * x) + jnp.dot(q, x) + c
+
+
+@jax.jit
+def _shared_diagonal_running_cost(
+    x: Array, u: Array, Q_diag: Array, R_diag: Array, q: Array, r: Array, c: Float
+) -> Float:
+    """Shared running diagonal cost function (state + input cost)."""
+    cost = 0.5 * jnp.dot(x, Q_diag * x) + jnp.dot(q, x) + c
+    cost += 0.5 * jnp.dot(u, R_diag * u) + jnp.dot(r, u)
+    return cost
+
+
+@jax.jit
+def _shared_quadratic_terminal_cost(x: Array, u: Array, Q: Array, q: Array, c: Float) -> Float:
+    """Shared terminal quadratic cost function (state cost only)."""
+    return 0.5 * x.T @ Q @ x + q.T @ x + c
+
+
+@jax.jit
+def _shared_quadratic_running_cost(
+    x: Array, u: Array, Q: Array, R: Array, H: Array, q: Array, r: Array, c: Float
+) -> Float:
+    """Shared running quadratic cost function (state + input cost)."""
+    cost = 0.5 * x.T @ Q @ x + q.T @ x + c
+    cost += 0.5 * u.T @ R @ u + r.T @ u + u.T @ H @ x
+    return cost
+
+
 class ALTROSolver:
     """Main ALTRO solver interface matching C++ ALTROSolver class.
 
     This class provides the complete user-facing API for trajectory optimization
     using the ALTRO algorithm with JAX acceleration and automatic differentiation.
+    All cost functions use JAX autodiff - no manual differentiation.
     """
 
     def __init__(self, horizon_length: int):
@@ -150,7 +204,7 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set diagonal cost function matching C++ SetDiagonalCost.
+        """Set diagonal cost function using shared JAX functions for maximum performance.
 
         Args:
             num_states: Number of states
@@ -166,6 +220,16 @@ class ALTROSolver:
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set cost function")
 
+        # Select appropriate shared function and create parameter binding
+        if num_inputs == 0:  # Terminal cost
+            cost_function = functools.partial(
+                _shared_diagonal_terminal_cost, Q_diag=Q_diag, q=q, c=c
+            )
+        else:  # Non-terminal cost
+            cost_function = functools.partial(
+                _shared_diagonal_running_cost, Q_diag=Q_diag, R_diag=R_diag, q=q, r=r, c=c
+            )
+
         for k in range(k_start, k_stop):
             n = self.get_state_dim(k)
             m = self.get_input_dim(k)
@@ -175,7 +239,7 @@ class ALTROSolver:
             if k != self.get_horizon_length() and m != num_inputs:
                 _altro_throw("Input dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
 
-            self.solver.data[k].set_diagonal_cost(n, m, Q_diag, R_diag, q, r, float(c))
+            self.solver.data[k].set_cost_function(cost_function)
 
     def set_quadratic_cost(
         self,
@@ -190,7 +254,7 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Set quadratic cost function matching C++ SetQuadraticCost.
+        """Set quadratic cost function using shared JAX functions for maximum performance.
 
         Args:
             num_states: Number of states
@@ -207,6 +271,14 @@ class ALTROSolver:
         k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
         self._assert_dimensions_are_set(k_start, k_stop, "Cannot set cost function")
 
+        # Select appropriate shared function and create parameter binding
+        if num_inputs == 0:  # Terminal cost
+            cost_function = functools.partial(_shared_quadratic_terminal_cost, Q=Q, q=q, c=c)
+        else:  # Non-terminal cost
+            cost_function = functools.partial(
+                _shared_quadratic_running_cost, Q=Q, R=R, H=H, q=q, r=r, c=c
+            )
+
         for k in range(k_start, k_stop):
             n = self.get_state_dim(k)
             m = self.get_input_dim(k)
@@ -216,7 +288,7 @@ class ALTROSolver:
             if k != self.get_horizon_length() and m != num_inputs:
                 _altro_throw("Input dimension mismatch", ErrorCode.DIMENSION_MISMATCH)
 
-            self.solver.data[k].set_quadratic_cost(n, m, Q, R, H, q, r, c)
+            self.solver.data[k].set_cost_function(cost_function)
 
     def set_lqr_cost(
         self,
@@ -229,7 +301,7 @@ class ALTROSolver:
         k_start: int,
         k_stop: int = 0,
     ) -> None:
-        """Set LQR tracking cost matching C++ SetLQRCost.
+        """Set LQR tracking cost using shared JAX functions for maximum performance.
 
         Args:
             num_states: Number of states
@@ -246,6 +318,14 @@ class ALTROSolver:
 
         N = self.get_horizon_length()
 
+        # Select appropriate shared function and create parameter binding
+        if num_inputs == 0:  # Terminal cost
+            cost_function = functools.partial(_shared_lqr_terminal_cost, Q_diag=Q_diag, x_ref=x_ref)
+        else:  # Non-terminal cost
+            cost_function = functools.partial(
+                _shared_lqr_running_cost, Q_diag=Q_diag, R_diag=R_diag, x_ref=x_ref, u_ref=u_ref
+            )
+
         for k in range(k_start, k_stop):
             n = self.get_state_dim(k)
             m = self.get_input_dim(k)
@@ -255,15 +335,7 @@ class ALTROSolver:
             if k != N and m != num_inputs:
                 _altro_throw(f"Input dimension mismatch at index {k}", ErrorCode.DIMENSION_MISMATCH)
 
-            # Convert to standard quadratic form: (x-xref)^T Q (x-xref) + (u-uref)^T R (u-uref)
-            q = -Q_diag * x_ref
-            r = -R_diag * u_ref
-            c = 0.5 * jnp.dot(x_ref, Q_diag * x_ref)
-
-            if k != N:
-                c += 0.5 * jnp.dot(u_ref, R_diag * u_ref)
-
-            self.solver.data[k].set_diagonal_cost(n, m, Q_diag, R_diag, q, r, float(c))
+            self.solver.data[k].set_cost_function(cost_function)
 
     def set_constraint(
         self,
@@ -503,7 +575,7 @@ class ALTROSolver:
         k_start: int = ALL_INDICES,
         k_stop: int = 0,
     ) -> None:
-        """Update linear costs for MPC matching C++ UpdateLinearCosts.
+        """Update linear costs for MPC - not supported since we use JAX autodiff only.
 
         Args:
             q: Linear state cost (can be None)
@@ -512,17 +584,10 @@ class ALTROSolver:
             k_start: Starting knot point index
             k_stop: Ending knot point index (non-inclusive)
         """
-        self._assert_initialized()
-        k_start, k_stop = self._check_knot_point_indices(k_start, k_stop, True)
-
-        for k in range(k_start, k_stop):
-            # Update costs - this would need to be implemented in KnotPointData
-            # For now, just validate the operation is possible
-            if not self.solver.data[k].cost_function_is_quadratic():
-                _altro_throw(
-                    f"Cannot update linear costs at index {k}. Cost function not quadratic",
-                    ErrorCode.COST_NOT_QUADRATIC,
-                )
+        _altro_throw(
+            "update_linear_costs not supported - use set_cost_function with updated parameters",
+            ErrorCode.COST_NOT_QUADRATIC,
+        )
 
     def shift_trajectory(self) -> None:
         """Shift trajectory for MPC matching C++ ShiftTrajectory."""
