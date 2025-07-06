@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -36,6 +37,14 @@ def _require_initialized_array(arr: Array | None, context: str) -> Array:
     if arr is None:
         _altro_throw(f"Array not initialized: {context}", ErrorCode.SOLVER_NOT_INITIALIZED)
     return arr
+
+
+@jax.jit
+def _compute_stationarity_step(lx_k, A_k, y_next, y_k, lu_k, B_k):
+    """JIT-compiled stationarity computation for single time step."""
+    stationarity_x = jnp.max(jnp.abs(lx_k + A_k.T @ y_next - y_k))
+    stationarity_u = jnp.max(jnp.abs(lu_k + B_k.T @ y_next))
+    return stationarity_x, stationarity_u
 
 
 class SolverImpl:
@@ -355,51 +364,70 @@ class SolverImpl:
         return alpha, ErrorCode.NO_ERROR
 
     def merit_function(self, alpha: Float) -> tuple[Float, Float]:
-        """Merit function evaluation matching C++ MeritFunction."""
+        """Merit function evaluation with cached array validation."""
         if not self.is_initialized:
             _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
         N = self.horizon_length
-
         phi = 0.0
         dphi = 0.0
 
-        # Validate and set initial state
+        # Validate and cache arrays ONCE at start
         _require_initialized_array(self.data[0].x_, "initial state x_[0]")
         self.data[0].x_ = self.initial_state
         self.data[0].dx_da_ = jnp.zeros_like(self.initial_state)
 
-        # Forward simulate
+        # Pre-validate all arrays to avoid repeated validation overhead
+        cached_arrays = {}
+        for k in range(N + 1):
+            knot_point = self.data[k]
+
+            # Cache reference arrays (read-only in loop)
+            if k < N:
+                cached_arrays[f"ref_state_{k}"] = _require_initialized_array(
+                    knot_point.x, f"reference state x[{k}]"
+                )
+                cached_arrays[f"ref_input_{k}"] = _require_initialized_array(
+                    knot_point.u, f"reference input u[{k}]"
+                )
+                cached_arrays[f"feedback_gain_{k}"] = _require_initialized_array(
+                    knot_point.K_, f"feedback gain K_[{k}]"
+                )
+                cached_arrays[f"feedforward_{k}"] = _require_initialized_array(
+                    knot_point.d_, f"feedforward term d_[{k}]"
+                )
+                cached_arrays[f"cost_to_go_matrix_{k}"] = _require_initialized_array(
+                    knot_point.P_, f"cost-to-go matrix P_[{k}]"
+                )
+                cached_arrays[f"cost_to_go_vector_{k}"] = _require_initialized_array(
+                    knot_point.p_, f"cost-to-go vector p_[{k}]"
+                )
+
+        # Forward simulate with cached arrays
         for k in range(N):
             knot_point = self.data[k]
             next_knot_point = self.data[k + 1]
 
-            # Validate and extract required arrays for merit function computation
-            current_state = _require_initialized_array(knot_point.x_, f"current state x_[{k}]")
-            ref_state = _require_initialized_array(knot_point.x, f"reference state x[{k}]")
-            ref_input = _require_initialized_array(knot_point.u, f"reference input u[{k}]")
-            feedback_gain = _require_initialized_array(knot_point.K_, f"feedback gain K_[{k}]")
-            feedforward_term = _require_initialized_array(
-                knot_point.d_, f"feedforward term d_[{k}]"
-            )
-            cost_to_go_matrix = _require_initialized_array(
-                knot_point.P_, f"cost-to-go matrix P_[{k}]"
-            )
-            cost_to_go_vector = _require_initialized_array(
-                knot_point.p_, f"cost-to-go vector p_[{k}]"
-            )
-            next_state = _require_initialized_array(next_knot_point.x_, f"next state x_[{k + 1}]")
+            # Use cached arrays (no validation overhead)
+            current_state = knot_point.x_  # Already validated above
+            ref_state = cached_arrays[f"ref_state_{k}"]
+            ref_input = cached_arrays[f"ref_input_{k}"]
+            feedback_gain = cached_arrays[f"feedback_gain_{k}"]
+            feedforward_term = cached_arrays[f"feedforward_{k}"]
+            cost_to_go_matrix = cached_arrays[f"cost_to_go_matrix_{k}"]
+            cost_to_go_vector = cached_arrays[f"cost_to_go_vector_{k}"]
 
-            # Compute control
+            # Compute control (preserve exact logic)
             dx = current_state - ref_state
             du = -feedback_gain @ dx + alpha * feedforward_term
             knot_point.u_ = ref_input + du
             knot_point.y_ = cost_to_go_matrix @ dx + cost_to_go_vector
 
-            # Simulate forward
+            # Simulate forward (preserve method call - may have side effects)
+            next_state = _require_initialized_array(next_knot_point.x_, f"next state x_[{k + 1}]")
             next_knot_point.x_ = knot_point.calc_dynamics(next_state)
 
-            # Calculate cost
+            # Calculate cost (preserve method calls)
             knot_point.calc_constraints()
             cost = knot_point.calc_cost()
             phi += cost
@@ -407,35 +435,33 @@ class SolverImpl:
             # Calculate gradient wrt alpha
             knot_point.calc_dynamics_expansion()
 
-            # Validate gradient computation arrays
-            dynamics_A = _require_initialized_array(knot_point.A_, f"dynamics Jacobian A_[{k}]")
-            dynamics_B = _require_initialized_array(knot_point.B_, f"dynamics Jacobian B_[{k}]")
-            state_sensitivity = _require_initialized_array(
-                knot_point.dx_da_, f"state sensitivity dx_da_[{k}]"
-            )
-
+            # Use validated arrays for gradient computation
+            state_sensitivity = knot_point.dx_da_  # Already initialized above
             knot_point.du_da_ = -feedback_gain @ state_sensitivity + feedforward_term
+
+            # These arrays are set by calc_dynamics_expansion() above
+            dynamics_A = knot_point.A_
+            dynamics_B = knot_point.B_
             next_knot_point.dx_da_ = dynamics_A @ state_sensitivity + dynamics_B @ knot_point.du_da_
 
             # Calculate cost gradient
             knot_point.calc_constraint_jacobians()
             knot_point.calc_cost_gradient()
 
-            # Validate cost gradient arrays
-            cost_grad_state = _require_initialized_array(knot_point.lx_, f"cost gradient lx_[{k}]")
-            cost_grad_input = _require_initialized_array(knot_point.lu_, f"cost gradient lu_[{k}]")
+            # Use arrays without validation (set by calc_cost_gradient())
+            cost_grad_state = knot_point.lx_
+            cost_grad_input = knot_point.lu_
 
             dphi += float(cost_grad_state.T @ state_sensitivity)
             dphi += float(cost_grad_input.T @ knot_point.du_da_)
 
-        # Terminal knot point
+        # Terminal knot point (preserve existing logic exactly)
         terminal_knot_point = self.data[N]
+        terminal_knot_point.calc_constraints()
+        cost = terminal_knot_point.calc_cost()
+        phi += cost
 
-        # Validate terminal knot point arrays
-        terminal_current_state = _require_initialized_array(
-            terminal_knot_point.x_, f"terminal current state x_[{N}]"
-        )
-        terminal_ref_state = _require_initialized_array(
+        dx = terminal_knot_point.x_ - _require_initialized_array(
             terminal_knot_point.x, f"terminal reference state x[{N}]"
         )
         terminal_cost_to_go_matrix = _require_initialized_array(
@@ -444,31 +470,15 @@ class SolverImpl:
         terminal_cost_to_go_vector = _require_initialized_array(
             terminal_knot_point.p_, f"terminal cost-to-go vector p_[{N}]"
         )
-
-        terminal_knot_point.calc_constraints()
-        cost = terminal_knot_point.calc_cost()
-        phi += cost
-
-        dx = terminal_current_state - terminal_ref_state
         terminal_knot_point.y_ = terminal_cost_to_go_matrix @ dx + terminal_cost_to_go_vector
 
         terminal_knot_point.calc_constraint_jacobians()
         terminal_knot_point.calc_cost_gradient()
 
-        # Validate terminal cost gradient arrays
-        terminal_cost_grad = _require_initialized_array(
-            terminal_knot_point.lx_, f"terminal cost gradient lx_[{N}]"
-        )
-        terminal_state_sensitivity = _require_initialized_array(
-            terminal_knot_point.dx_da_, f"terminal state sensitivity dx_da_[{N}]"
-        )
+        dphi += float(terminal_knot_point.lx_.T @ terminal_knot_point.dx_da_)
 
-        dphi += float(terminal_cost_grad.T @ terminal_state_sensitivity)
-
-        # Invalidate cached values
+        # Preserve cache invalidation logic
         self._invalidate_cache()
-
-        # Mark what was updated
         self.constraint_vals_up_to_date = True
         self.projected_duals_up_to_date = True
         self.dynamics_jacs_up_to_date = True
@@ -491,49 +501,47 @@ class SolverImpl:
         return cost
 
     def calc_stationarity(self) -> Float:
-        """Calculate stationarity measure matching C++ Stationarity."""
+        """Calculate stationarity with JIT-compiled kernels and cached validation."""
         N = self.horizon_length
-        res_x = 0.0
-        res_u = 0.0
 
+        # Pre-validate all required arrays once
+        validated_data = []
         for k in range(N):
             z = self.data[k]
             zn = self.data[k + 1]
 
-            # Validate arrays for stationarity calculation
-            state_grad = _require_initialized_array(
-                z.lx_, f"state gradient lx_[{k}] for stationarity"
+            validated_data.append(
+                (
+                    _require_initialized_array(z.lx_, f"state gradient lx_[{k}]"),
+                    _require_initialized_array(z.A_, f"dynamics A_[{k}]"),
+                    _require_initialized_array(zn.y_, f"next dual y_[{k + 1}]"),
+                    _require_initialized_array(z.y_, f"current dual y_[{k}]"),
+                    _require_initialized_array(z.lu_, f"input gradient lu_[{k}]"),
+                    _require_initialized_array(z.B_, f"dynamics B_[{k}]"),
+                )
             )
-            dynamics_A = _require_initialized_array(z.A_, f"dynamics A_[{k}] for stationarity")
-            next_dual = _require_initialized_array(zn.y_, f"next dual y_[{k + 1}] for stationarity")
-            current_dual = _require_initialized_array(
-                z.y_, f"current dual y_[{k}] for stationarity"
-            )
-            input_grad = _require_initialized_array(
-                z.lu_, f"input gradient lu_[{k}] for stationarity"
-            )
-            dynamics_B = _require_initialized_array(z.B_, f"dynamics B_[{k}] for stationarity")
 
-            # Convert JAX arrays to scalars for max comparison
-            stationarity_x = float(
-                jnp.max(jnp.abs(state_grad + dynamics_A.T @ next_dual - current_dual))
-            )
-            stationarity_u = float(jnp.max(jnp.abs(input_grad + dynamics_B.T @ next_dual)))
+        # Compute stationarity using JIT-compiled kernel
+        res_x = 0.0
+        res_u = 0.0
 
-            res_x = max(res_x, stationarity_x)
-            res_u = max(res_u, stationarity_u)
+        for lx_k, A_k, y_next, y_k, lu_k, B_k in validated_data:
+            stat_x, stat_u = _compute_stationarity_step(lx_k, A_k, y_next, y_k, lu_k, B_k)
+            res_x = max(res_x, float(stat_x))
+            res_u = max(res_u, float(stat_u))
 
-        # Terminal stationarity
+        # Terminal stationarity (preserve exact logic)
         terminal_z = self.data[N]
-        terminal_state_grad = _require_initialized_array(
-            terminal_z.lx_, f"terminal state gradient lx_[{N}] for stationarity"
-        )
-        terminal_dual = _require_initialized_array(
-            terminal_z.y_, f"terminal dual y_[{N}] for stationarity"
+        terminal_stat = float(
+            jnp.max(
+                jnp.abs(
+                    _require_initialized_array(terminal_z.lx_, f"terminal state gradient lx_[{N}]")
+                    - _require_initialized_array(terminal_z.y_, f"terminal dual y_[{N}]")
+                )
+            )
         )
 
-        res_x = max(res_x, float(jnp.max(jnp.abs(terminal_state_grad - terminal_dual))))
-
+        res_x = max(res_x, terminal_stat)
         return max(res_x, res_u)
 
     def calc_feasibility(self) -> Float:

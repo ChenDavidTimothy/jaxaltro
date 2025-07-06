@@ -98,9 +98,6 @@ def _lqr_step_backward(
     return K_k, d_k, P_k, p_k, Qu_out, Quu_d, cholesky_success
 
 
-# REPLACE the _tvlqr_backward_pass function with this corrected version:
-
-
 def _tvlqr_backward_pass(
     nx: list[int],
     nu: list[int],
@@ -194,9 +191,6 @@ def _lqr_step_forward(
     y_k = P_k @ x_k + p_k
 
     return u_k, x_next, y_k
-
-
-# REPLACE _tvlqr_forward_pass with this (NO @jax.jit decorator):
 
 
 def _tvlqr_forward_pass(

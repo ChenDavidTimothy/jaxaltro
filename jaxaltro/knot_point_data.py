@@ -700,8 +700,6 @@ class KnotPointData:
         if not self.constraint_functions:
             return
 
-        # Assumes the constraints and Jacobians have been evaluated
-        # Assumes the projected duals have already been calculated
         self._calc_conic_jacobians()
 
         n = self.get_state_dim()
@@ -713,7 +711,6 @@ class KnotPointData:
             assert self.lu_ is not None
 
         for j in range(len(self.constraint_functions)):
-            # Split jacobian outside JIT (no dynamic slicing issue)
             constraint_jac = self.constraint_jacs[j]
             projected_dual = self.projected_duals[j]
 
@@ -734,9 +731,7 @@ class KnotPointData:
 
     def _calc_constraint_cost_hessians(self) -> None:
         """Calculate constraint cost Hessians matching C++ CalcConstraintCostHessians."""
-        # Assumes the constraints and Jacobians have been evaluated
-        # Assumes the projected duals have already been calculated
-        # Assumes the projected Jacobian has already been calculated
+
         self._calc_conic_hessians()
 
         n = self.get_state_dim()
