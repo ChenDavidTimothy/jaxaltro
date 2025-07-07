@@ -22,18 +22,6 @@ from .types import Float, SolveStatus
 
 
 def _require_initialized_array(arr: Array | None, context: str) -> Array:
-    """Validate array is initialized matching C++ pointer validation pattern.
-
-    Args:
-        arr: Array that may be None
-        context: Descriptive context for error messages
-
-    Returns:
-        Validated non-None array
-
-    Raises:
-        AltroError: If array is None with detailed context
-    """
     if arr is None:
         _altro_throw(f"Array not initialized: {context}", ErrorCode.SOLVER_NOT_INITIALIZED)
     return arr
@@ -41,17 +29,13 @@ def _require_initialized_array(arr: Array | None, context: str) -> Array:
 
 @jax.jit
 def _compute_stationarity_step(lx_k, A_k, y_next, y_k, lu_k, B_k):
-    """JIT-compiled stationarity computation for single time step."""
     stationarity_x = jnp.max(jnp.abs(lx_k + A_k.T @ y_next - y_k))
     stationarity_u = jnp.max(jnp.abs(lu_k + B_k.T @ y_next))
     return stationarity_x, stationarity_u
 
 
 class SolverImpl:
-    """Core ALTRO solver implementation matching C++ SolverImpl class."""
-
     def __init__(self, horizon_length: int):
-        """Initialize solver with given horizon length matching C++ constructor."""
         self.horizon_length = horizon_length
         self.nx = [0] * (horizon_length + 1)  # State dimensions
         self.nu = [0] * (horizon_length + 1)  # Input dimensions
@@ -94,7 +78,6 @@ class SolverImpl:
         self.delta_V = jnp.zeros(2)
 
     def initialize(self) -> None:
-        """Initialize solver matching C++ Initialize."""
         # Initialize each knot point
         for data in self.data:
             data.initialize()
@@ -109,11 +92,9 @@ class SolverImpl:
         self.is_initialized = True
 
     def is_initialized_fn(self) -> bool:
-        """Check if solver is initialized."""
         return self.is_initialized
 
     def solve(self) -> None:
-        """Main solve loop matching C++ Solve."""
         if not self.is_initialized:
             _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
@@ -243,7 +224,6 @@ class SolverImpl:
             print("ALTRO SOLVE FINISHED!")
 
     def backward_pass(self) -> ErrorCode:
-        """Backward pass using TVLQR matching C++ BackwardPass."""
         if not self.is_initialized:
             return ErrorCode.SOLVER_NOT_INITIALIZED
 
@@ -323,8 +303,6 @@ class SolverImpl:
         return ErrorCode.NO_ERROR
 
     def forward_pass(self) -> tuple[Float, ErrorCode]:
-        """Forward pass with line search matching C++ ForwardPass."""
-
         # Define merit function for line search
         def merit_function(alpha: Float) -> tuple[Float, Float]:
             phi, dphi = self.merit_function(alpha)
@@ -364,7 +342,6 @@ class SolverImpl:
         return alpha, ErrorCode.NO_ERROR
 
     def merit_function(self, alpha: Float) -> tuple[Float, Float]:
-        """Merit function evaluation with cached array validation."""
         if not self.is_initialized:
             _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 
@@ -533,7 +510,6 @@ class SolverImpl:
         return cost
 
     def calc_stationarity(self) -> Float:
-        """Calculate stationarity with JIT-compiled kernels and cached validation."""
         N = self.horizon_length
 
         # Pre-validate all required arrays once
@@ -582,7 +558,6 @@ class SolverImpl:
         return max(res_x, res_u)
 
     def calc_feasibility(self) -> Float:
-        """Calculate feasibility measure matching C++ Feasibility."""
         viol = 0.0
         for k in range(self.horizon_length + 1):
             viol_k = self.data[k].calc_violations()
@@ -590,7 +565,6 @@ class SolverImpl:
         return viol
 
     def open_loop_rollout(self) -> None:
-        """Open loop rollout matching C++ OpenLoopRollout."""
         if not self.is_initialized:
             _altro_throw("Solver not initialized", ErrorCode.SOLVER_NOT_INITIALIZED)
 

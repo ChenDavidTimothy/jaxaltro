@@ -13,11 +13,6 @@ from .types import Float, SolveStatus
 
 @dataclass
 class AltroStats:
-    """Performance statistics for ALTRO solver matching C++ AltroStats struct.
-
-    Tracks solver performance metrics including timing, convergence, and iteration counts.
-    """
-
     # Solver termination status
     status: SolveStatus = SolveStatus.UNSOLVED
 

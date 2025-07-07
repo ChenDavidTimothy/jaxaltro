@@ -1,9 +1,3 @@
-"""Time-Varying Linear Quadratic Regulator for JAX-based ALTRO.
-
-This module provides TVLQR functionality that directly corresponds to the C++
-tvlqr.h/cpp implementation, maintaining identical mathematical behavior.
-"""
-
 from __future__ import annotations
 
 import jax
@@ -14,16 +8,7 @@ from jax import Array
 from .types import Float
 
 
-# Success code matching C++ TVLQR_SUCCESS
 TVLQR_SUCCESS = -1
-
-
-# REMOVE @jax.jit from the main function, add it to computational kernels
-
-# ADD these JIT-compiled computational kernels at the top of tvlqr.py:
-
-
-# REPLACE the JIT-compiled computational kernel with this corrected version:
 
 
 @jax.jit
@@ -243,32 +228,6 @@ def tvlqr_backward_pass(
     reg: Float,
     is_diag: bool = False,
 ) -> tuple[list[Array], list[Array], list[Array], list[Array], Array, int]:
-    """Perform backward pass for time-varying LQR problem.
-
-    Args:
-        nx: State dimensions at each time step
-        nu: Control dimensions at each time step
-        num_horizon: Number of time steps
-        A: Dynamics Jacobian matrices (wrt state)
-        B: Dynamics Jacobian matrices (wrt control)
-        f: Affine dynamics terms
-        Q: State cost matrices
-        R: Control cost matrices
-        H: Cross-term cost matrices
-        q: Linear state cost terms
-        r: Linear control cost terms
-        reg: Regularization parameter
-        is_diag: Whether cost matrices are diagonal
-
-    Returns:
-        Tuple of (K, d, P, p, delta_V, status_code)
-        K: Feedback gain matrices
-        d: Feedforward terms
-        P: Cost-to-go matrices
-        p: Cost-to-go vectors
-        delta_V: Expected cost reduction
-        status_code: Success/failure indicator (TVLQR_SUCCESS or knot point index)
-    """
     return _tvlqr_backward_pass(nx, nu, num_horizon, A, B, f, Q, R, H, q, r, reg, is_diag)
 
 
@@ -285,44 +244,12 @@ def tvlqr_forward_pass(
     p: list[Array],
     x0: Array,
 ) -> tuple[list[Array], list[Array], list[Array]]:
-    """Perform forward pass for time-varying LQR problem.
-
-    Args:
-        nx: State dimensions at each time step
-        nu: Control dimensions at each time step
-        num_horizon: Number of time steps
-        A: Dynamics Jacobian matrices (wrt state)
-        B: Dynamics Jacobian matrices (wrt control)
-        f: Affine dynamics terms
-        K: Feedback gain matrices
-        d: Feedforward terms
-        P: Cost-to-go matrices
-        p: Cost-to-go vectors
-        x0: Initial state
-
-    Returns:
-        Tuple of (x, u, y)
-        x: State trajectory
-        u: Control trajectory
-        y: Dual variable trajectory
-    """
     return _tvlqr_forward_pass(nx, nu, num_horizon, A, B, f, K, d, P, p, x0)
 
 
 def tvlqr_total_mem_size(
     nx: list[int], nu: list[int], num_horizon: int, is_diag: bool = False
 ) -> int:
-    """Calculate total memory size needed for TVLQR data structures.
-
-    Args:
-        nx: State dimensions at each time step
-        nu: Control dimensions at each time step
-        num_horizon: Number of time steps
-        is_diag: Whether cost matrices are diagonal
-
-    Returns:
-        Total memory size in bytes
-    """
     mem_size = 0
 
     for k in range(num_horizon + 1):

@@ -1,9 +1,3 @@
-"""Solver configuration options for JAX-based ALTRO trajectory optimization.
-
-This module provides the solver options that directly correspond to the C++
-AltroOptions struct, maintaining identical default values and parameter ranges.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,11 +7,6 @@ from .types import Float, Verbosity
 
 @dataclass(frozen=True)
 class AltroOptions:
-    """Configuration options for ALTRO solver matching C++ AltroOptions struct.
-
-    All default values are identical to the C++ implementation.
-    """
-
     # Maximum number of iterations
     iterations_max: int = 200
 
